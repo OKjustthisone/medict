@@ -1,0 +1,44 @@
+{
+  "name": "medict-desktop",
+  "version": "0.1.0",
+  "description": "A Windows desktop dictionary, translation and drug information workspace.",
+  "private": true,
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test",
+    "check": "node --check src/main/main.js && node --check src/main/preload.js && node --check src/main/dictionary-manager.js && node --check src/main/services/dictionary-api.js && node --check src/main/services/translation.js && node --check src/main/services/drugshop.js && node --check src/renderer/renderer.js",
+    "dist": "electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "^37.2.6",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.medict.desktop",
+    "productName": "Medict",
+    "asar": true,
+    "files": [
+      "src/**/*",
+      "package.json",
+      "README.md"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "artifactName": "Medict-${version}-${arch}-setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false
+    }
+  }
+}
