@@ -2,7 +2,7 @@
 
 Medict 是一个面向 Windows 的小型桌面查词窗口。界面参考 [pot-desktop](https://github.com/pot-app/pot-desktop) 的轻量弹窗思路，但查询模型只有一个输入框和两个动作：
 
-- **查词**：先查本地词典的精确词条；没有命中时，用 Free Dictionary 获取音标、词性、多义项和例句，再由 Google / 有道补充中文释义和整词翻译。词典详细义项优先显示，Google / 有道整词翻译排在后面。
+- **查词**：先查本地词典的精确词条；没有命中时，可用百度官方“文本翻译-词典版”返回音标、词性、中英多义项、例句和词形变化；未启用或未命中时回退到 Free Dictionary，再由 Google / 有道补充整词翻译。词典详细义项优先显示，云端整词翻译排在后面。
 - **药物查询**：调用从 `drugshop` 集成的完整公开数据查询链路。
 - **自动划词**：在其他 Windows 应用中用鼠标选中文本后，同时执行上面两条查询，并弹出同一个结果窗口；不是药物时明确显示“未找到该药物”。该行为可以在设置中开关。
 - **快捷键**：默认使用 `Ctrl + Alt + M` 打开面板，使用 `Ctrl + Alt + D` 读取当前选区并查询；两个快捷键都可在设置中重新录入或清除。
@@ -10,7 +10,9 @@ Medict 是一个面向 Windows 的小型桌面查词窗口。界面参考 [pot-d
 
 ## 当前可运行范围
 
-本轮按需求暂不安装本地词典。英文单词会自动调用免密钥的 [Free Dictionary API](https://dictionaryapi.dev/)；应用默认启用 Google 免密钥兼容模式，为每条英文释义补充中文翻译。设置里也可以切换到 Google Cloud Translation API，或填写有道智云 App ID / App Secret。短语和长文本不走词典义项，直接进入翻译流程。
+本轮按需求暂不安装本地词典。英文单词会自动调用免密钥的 [Free Dictionary API](https://dictionaryapi.dev/)；如果在设置中填写百度智能云 API Key / Secret Key 并开通“文本翻译-词典版”，会优先使用百度的完整中英词典数据。应用默认启用 Google 免密钥兼容模式，也可以切换到 Google Cloud Translation API，或填写有道智云 App ID / App Secret 作为补充翻译。短语和长文本不一定返回词典字段，会继续显示可用的翻译结果。
+
+百度词典版使用官方 `texttrans-with-dict/v1` 接口：应用只保存用户输入的 API Key / Secret Key，并在本机换取短期 Access Token；百度服务权限、额度和词典字段以账号开通情况为准。百度接口没有返回完整词典数据时，Medict 会继续使用 Free Dictionary / Google / 有道，不会因为百度失败而覆盖其他结果。
 
 药物查询并行聚合以下公开服务：
 
@@ -49,9 +51,10 @@ npm.cmd run dist
    ├─ 本地词典精确命中 ─→ 直接显示本地释义，不访问云端
    │
    └─ 本地未命中
-        ├─ 单个英文词 ─→ Free Dictionary 完整义项
-        │                 └─ Google / 有道补充中文释义
-        └─ 短语或文本 ─→ Google / 有道直接翻译
+        ├─ 单个英文词 ─→ 百度词典版（已配置且有返回时）
+        │                 └─ 否则 Free Dictionary 完整义项
+        │                     └─ Google / 有道补充整词翻译
+        └─ 短语或文本 ─→ 百度 / Google / 有道直接翻译
 
 划词事件同时启动：
    ├─ 上面的普通查词流程
@@ -75,11 +78,13 @@ GoldenDict 不是单一词典文件格式，它常用 StarDict、DSL、Dictd、M
 
 Oxford Advanced Learner's、Longman 和 Merriam-Webster 的完整词典内容并不因为可下载就自动成为开源内容。Medict 只提供格式适配和查询接口，不随程序分发这些词典；用户需要确认自己导入内容的许可证和使用权限。
 
-当前在线英英释义来自 Free Dictionary API。应用显示接口响应中附带的原始词条链接和许可证信息，不复制或打包其词典数据库；若该公共服务不可用，Google / 有道整词翻译仍可独立返回。
+当前在线英英释义来自 Free Dictionary API；百度词典版提供中英词典字段。应用显示接口响应中附带的原始词条链接和许可证信息，不复制或打包其词典数据库；若某个公共服务不可用，其他已配置的服务仍可独立返回。
 
-## Google 模式说明
+## 云端服务说明
 
 默认的“免密钥兼容模式”用于快速试用，调用 Google 翻译的兼容接口，接口可能随服务调整而变化。需要稳定生产使用时，建议在设置中切换到正式 Google Cloud Translation API。API Key 和有道密钥保存在 Electron 用户数据目录，不会提交到 Git；后续版本应再接入 Windows Credential Manager / Electron `safeStorage`。
+
+百度词典版需要在百度智能云控制台开通对应服务，并在 Medict 设置中填写 API Key 和 Secret Key。百度返回的词典资源包括英文释义、中文释义、音标、核心词汇类别、例句和词形变化等，但单个查询为句子或账号没有词典版权限时，接口可能只返回普通翻译。
 
 ## 项目结构
 
@@ -89,7 +94,7 @@ src/main/main.js              窗口、托盘、并行查询和 IPC
 src/main/dictionary-manager.js 本地词典索引边界
 src/main/services/word-lookup.js 本地优先 / 云端回退编排
 src/main/services/dictionary-api.js Free Dictionary / Oxford / Merriam-Webster 适配
-src/main/services/translation.js Google / 有道适配
+src/main/services/translation.js Google / 有道 / 百度词典版适配
 src/main/services/drugshop.js DrugShop 公开数据库聚合
 src/main/selection-monitor.js Windows 划词助手进程管理
 src/native/SelectionHelper.cs Windows 全局鼠标与选区读取

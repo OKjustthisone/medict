@@ -300,6 +300,11 @@ button:disabled { cursor: wait; opacity: .62; }
 .phonetic { color: #7080a0; font-family: Georgia, serif; font-size: 12px; }
 .audio-button { display: inline-grid; width: 23px; height: 23px; place-items: center; border: 1px solid #e0e5f1; border-radius: 50%; color: #5d72a9; background: #f4f6fb; font-size: 8px; }
 .audio-button:hover { color: white; background: var(--blue); }
+.word-forms { display: flex; align-items: flex-start; gap: 7px; margin: -2px 0 9px; padding: 7px 8px; border-radius: 7px; color: #777d86; background: #f7f8fb; }
+.word-forms-label { flex: 0 0 auto; color: #9298a3; font-size: 9px; font-weight: 700; }
+.word-form-grid { display: flex; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
+.word-form { display: inline-flex; gap: 4px; color: #777d86; font-size: 9px; line-height: 1.45; }
+.word-form strong { color: #586987; font-weight: 650; user-select: text; }
 .meaning-group { padding-top: 8px; border-top: 1px solid #eeeeec; }
 .meaning-group + .meaning-group { margin-top: 7px; }
 .meaning-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 0 4px; }
@@ -492,6 +497,7 @@ kbd { padding: 1px 4px; border: 1px solid #d5d6d4; border-bottom-width: 2px; bor
 .dictionary-logo { color: white; background: linear-gradient(135deg, #6678a8, #4f9b86); }
 .google-logo { color: white; background: linear-gradient(135deg, #4285f4 25%, #34a853 25% 50%, #fbbc05 50% 75%, #ea4335 75%); }
 .youdao-logo { color: white; background: #df4545; }
+.baidu-logo { color: white; background: #4d6fe8; }
 .provider-title-row select { max-width: 150px; height: 27px; padding: 0 5px; border: 1px solid #dcdddb; border-radius: 6px; color: #666a70; background: #f8f8f6; font-size: 9px; }
 .provider-help { margin: 7px 0 0; color: #95989c; font-size: 8px; line-height: 1.45; }
 

@@ -25,6 +25,11 @@ const DEFAULT_SETTINGS = {
       appKey: "",
       appSecret: ""
     },
+    baidu: {
+      enabled: false,
+      apiKey: "",
+      secretKey: ""
+    },
     source: "auto",
     target: "zh-CN"
   },
@@ -76,6 +81,10 @@ function mergeSettings(value) {
       youdao: {
         ...clone(DEFAULT_SETTINGS.translation.youdao),
         ...(source.translation?.youdao || {})
+      },
+      baidu: {
+        ...clone(DEFAULT_SETTINGS.translation.baidu),
+        ...(source.translation?.baidu || {})
       }
     },
     behavior: {

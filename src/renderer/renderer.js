@@ -260,6 +260,18 @@
     return `<div class="sense"><span class="sense-number">${index + 1}</span><div class="sense-copy">${translations.length ? `<div class="sense-translation">${translations.map(esc).join("；")}</div>` : ""}<div class="definition">${esc(sense.definition || "暂无英文释义")}</div>${examples.length ? `<div class="example">${examples.map(example => `<div><span>例</span>${esc(example)}</div>`).join("")}</div>` : ""}${renderRelated("近义", sense.synonyms)}${renderRelated("反义", sense.antonyms)}<div class="sense-footer">${attribution}${copyButton("sense", "复制本条释义")}</div></div></div>`;
   }
 
+  function renderWordForms(forms) {
+    const rows = values(forms).map(item => {
+      if (!item || typeof item !== "object") return "";
+      const label = clean(item.label);
+      const formValues = values(item.values).map(clean).filter(Boolean);
+      return label && formValues.length
+        ? `<div class="word-form"><span>${esc(label)}</span><strong>${esc(formValues.join(" / "))}</strong></div>`
+        : "";
+    }).filter(Boolean);
+    return rows.length ? `<div class="word-forms"><span class="word-forms-label">变形</span><div class="word-form-grid">${rows.join("")}</div></div>` : "";
+  }
+
   function renderDictionaryEntry(entry) {
     const groups = groupSenses(entry.senses);
     const audio = entry.audioUrl
@@ -274,7 +286,7 @@
       ? `<div class="dictionary-source-row"><span>${source}${entry.source.license ? ` · ${esc(entry.source.license)}` : ""}</span></div>`
       : "";
     const providerName = entry.translationProvider?.name || "";
-    return `<div class="dictionary-entry result-body"><div class="word-head"><strong>${esc(entry.word)}</strong>${entry.phonetic ? `<span class="phonetic">${esc(entry.phonetic)}</span>` : ""}${audio}</div><div class="detail-heading">详细释义</div>${groups.map(group => `<section class="meaning-group"><div class="meaning-heading"><strong>${esc(partOfSpeechLabel(group.partOfSpeech))}</strong><span>${group.senses.length} 个义项</span></div>${group.senses.map((sense, index) => renderSense(sense, index, providerName)).join("")}</section>`).join("")}${sourceMeta}</div>`;
+    return `<div class="dictionary-entry result-body"><div class="word-head"><strong>${esc(entry.word)}</strong>${entry.phonetic ? `<span class="phonetic">${esc(entry.phonetic)}</span>` : ""}${audio}</div>${renderWordForms(entry.wordForms)}<div class="detail-heading">详细释义</div>${groups.map(group => `<section class="meaning-group"><div class="meaning-heading"><strong>${esc(partOfSpeechLabel(group.partOfSpeech))}</strong><span>${group.senses.length} 个义项</span></div>${group.senses.map((sense, index) => renderSense(sense, index, providerName)).join("")}</section>`).join("")}${sourceMeta}</div>`;
   }
 
   function renderCloudResult(result) {
@@ -287,7 +299,9 @@
   function renderCloudReference(results, dictionaryMode = false) {
     const rows = values(results);
     if (!rows.length) return "";
-    return `<div class="whole-word-translation${dictionaryMode ? " cloud-after-dictionary" : ""}"><div class="whole-word-heading"><strong>${dictionaryMode ? "整词翻译" : "翻译结果"}</strong><span>${dictionaryMode ? "Google / 有道补充" : ""}</span></div>${rows.map(renderCloudResult).join("")}</div>`;
+    const providers = [...new Set(rows.map(item => item.name || item.provider).filter(Boolean))];
+    const supplement = providers.length ? `${providers.join(" / ")}补充` : "";
+    return `<div class="whole-word-translation${dictionaryMode ? " cloud-after-dictionary" : ""}"><div class="whole-word-heading"><strong>${dictionaryMode ? "整词翻译" : "翻译结果"}</strong><span>${dictionaryMode ? esc(supplement) : ""}</span></div>${rows.map(renderCloudResult).join("")}</div>`;
   }
 
   function renderSuggestions(suggestions) {
@@ -313,7 +327,7 @@
       content = `<div class="result-body">${renderCloudReference(result.cloudResults)}${renderSuggestions(result.suggestions)}</div>`;
     } else {
       const configured = values(result.providers).length > 0;
-      content = `<div class="notice ${configured ? "warning" : ""}"><strong>${configured ? "云端没有返回结果" : "未配置可用的云端服务"}</strong>${configured ? "请检查网络或展开下方错误信息。" : "在设置中启用 Google 兼容模式，或填写 Google Cloud / 有道凭据。"}${renderSuggestions(result.suggestions)}</div>`;
+      content = `<div class="notice ${configured ? "warning" : ""}"><strong>${configured ? "云端没有返回结果" : "未配置可用的云端服务"}</strong>${configured ? "请检查网络或展开下方错误信息。" : "在设置中启用 Google 兼容模式，或填写 Google Cloud / 有道 / 百度凭据。"}${renderSuggestions(result.suggestions)}</div>`;
     }
     return `<section class="result-block">${heading}${content}${warningDetails(result.warnings)}</section>`;
   }
@@ -522,6 +536,9 @@
     setChecked("youdao-enabled", translation.youdao?.enabled);
     setField("youdao-app-key", translation.youdao?.appKey || "");
     setField("youdao-app-secret", translation.youdao?.appSecret || "");
+    setChecked("baidu-enabled", translation.baidu?.enabled);
+    setField("baidu-api-key", translation.baidu?.apiKey || "");
+    setField("baidu-secret-key", translation.baidu?.secretKey || "");
     setField("translation-target", translation.target || "zh-CN");
     setField("font-scale", settings.appearance?.fontScale || 115);
     setShortcutField("shortcut-show-window", settings.shortcuts?.showWindow ?? "CommandOrControl+Alt+M");
@@ -537,6 +554,7 @@
     settings.translation ||= {};
     settings.translation.google ||= {};
     settings.translation.youdao ||= {};
+    settings.translation.baidu ||= {};
     settings.behavior ||= {};
     settings.appearance ||= {};
     settings.shortcuts ||= {};
@@ -549,6 +567,9 @@
     settings.translation.youdao.enabled = $("#youdao-enabled").checked;
     settings.translation.youdao.appKey = clean($("#youdao-app-key").value);
     settings.translation.youdao.appSecret = clean($("#youdao-app-secret").value);
+    settings.translation.baidu.enabled = $("#baidu-enabled").checked;
+    settings.translation.baidu.apiKey = clean($("#baidu-api-key").value);
+    settings.translation.baidu.secretKey = clean($("#baidu-secret-key").value);
     settings.behavior.selectionLookup = $("#selection-enabled").checked;
     settings.behavior.selectionMaxLength = Number(settings.behavior.selectionMaxLength) || 500;
     settings.appearance.fontScale = Math.max(100, Math.min(145, Number($("#font-scale").value) || 115));
@@ -626,6 +647,10 @@
       }
       if (next.translation.youdao.enabled && (!next.translation.youdao.appKey || !next.translation.youdao.appSecret)) {
         $("#settings-status").textContent = "请填写有道凭据";
+        return;
+      }
+      if (next.translation.baidu.enabled && (!next.translation.baidu.apiKey || !next.translation.baidu.secretKey)) {
+        $("#settings-status").textContent = "请填写百度 API Key 和 Secret Key";
         return;
       }
       $("#settings-status").textContent = "保存中…";

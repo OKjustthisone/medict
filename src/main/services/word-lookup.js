@@ -14,6 +14,9 @@ function configuredCloudProviders(settings = {}) {
   if (translation.youdao?.enabled && translation.youdao.appKey && translation.youdao.appSecret) {
     providers.push("youdao");
   }
+  if (translation.baidu?.enabled && translation.baidu.apiKey && translation.baidu.secretKey) {
+    providers.unshift("baidu");
+  }
   return providers;
 }
 
@@ -83,8 +86,13 @@ async function lookupWord(query, options = {}) {
     definitionWarnings = segmentResult.warnings || [];
   }
 
-  const dictionaryResults = enrichedDictionary ? [enrichedDictionary] : [];
-  const cloudResults = cloud.results || [];
+  const baiduDictionary = (cloud.results || []).find(item => item?.dictionaryEntry)?.dictionaryEntry || null;
+  const dictionaryResults = baiduDictionary
+    ? [baiduDictionary]
+    : enrichedDictionary
+      ? [enrichedDictionary]
+      : [];
+  const cloudResults = (cloud.results || []).filter(item => !item?.dictionaryEntry);
   return {
     type: "word",
     query: value,

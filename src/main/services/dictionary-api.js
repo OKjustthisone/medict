@@ -1,6 +1,8 @@
 const DEFAULT_TIMEOUT = 12000;
 const SYSTEM_NETWORK_HOSTS = new Set([
   "api.dictionaryapi.dev",
+  "aip.baidubce.com",
+  "openapi.youdao.com",
   "translate.googleapis.com",
   "translation.googleapis.com"
 ]);

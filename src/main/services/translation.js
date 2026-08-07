@@ -30,6 +30,267 @@ function inputForYoudao(value) {
   return `${input.slice(0, 10)}${input.length}${input.slice(-10)}`;
 }
 
+const BAIDU_TOKEN_URL = "https://aip.baidubce.com/oauth/2.0/token";
+const BAIDU_DICTIONARY_URL = "https://aip.baidubce.com/rpc/2.0/mt/texttrans-with-dict/v1";
+const BAIDU_DICTIONARY_DOC_URL = "https://cloud.baidu.com/doc/MT/s/nkqrzmbpc";
+const baiduTokenCache = new Map();
+
+function targetForBaidu(value) {
+  const normalized = clean(value).toLowerCase();
+  if (["zh", "zh-cn", "zh-chs"].includes(normalized)) return "zh";
+  if (["en-us", "en-gb"].includes(normalized)) return "en";
+  if (normalized === "ja") return "jp";
+  return normalized;
+}
+
+function sourceForBaidu(value) {
+  const normalized = clean(value).toLowerCase();
+  if (["zh-cn", "zh-chs"].includes(normalized)) return "zh";
+  if (["en-us", "en-gb"].includes(normalized)) return "en";
+  if (normalized === "ja") return "jp";
+  return normalized || "auto";
+}
+
+function isBaiduDictionaryQuery(value) {
+  return /^[a-z][a-z' -]{0,63}$/i.test(clean(value));
+}
+
+function arrayValues(value) {
+  return (Array.isArray(value) ? value : value == null ? [] : [value])
+    .flatMap(item => Array.isArray(item) ? item : [item])
+    .map(clean)
+    .filter(Boolean);
+}
+
+function uniqueValues(values) {
+  return [...new Set(arrayValues(values))];
+}
+
+function partOfSpeechMatches(left, right) {
+  const aliases = {
+    n: "noun",
+    noun: "noun",
+    v: "verb",
+    vi: "verb",
+    vt: "verb",
+    verb: "verb",
+    adj: "adjective",
+    adjective: "adjective",
+    adv: "adverb",
+    adverb: "adverb",
+    prep: "preposition",
+    preposition: "preposition",
+    pron: "pronoun",
+    pronoun: "pronoun",
+    conj: "conjunction",
+    conjunction: "conjunction",
+    int: "interjection",
+    interj: "interjection",
+    interjection: "interjection"
+  };
+  const tokens = value => clean(value).toLowerCase()
+    .split(/[\/;,\s]+/)
+    .map(item => aliases[item.replace(/\.$/, "")] || item.replace(/\.$/, ""))
+    .filter(Boolean);
+  const leftTokens = tokens(left);
+  const rightTokens = tokens(right);
+  return !leftTokens.length || !rightTokens.length || leftTokens.some(item => rightTokens.includes(item));
+}
+
+function parseBaiduDictionary(value) {
+  if (!value) return null;
+  if (typeof value === "object") return value;
+  try {
+    return JSON.parse(String(value));
+  } catch (_) {
+    return null;
+  }
+}
+
+function normalizeBaiduDictionary(value, query, translationResult = {}) {
+  const data = parseBaiduDictionary(value);
+  if (!data || typeof data !== "object") return null;
+
+  const simpleMeans = data.simple_means || {};
+  const wordResult = data.word_result || {};
+  const edict = wordResult.edict || {};
+  const symbols = Array.isArray(simpleMeans.symbols) ? simpleMeans.symbols : [];
+  const parts = symbols.flatMap(symbol => Array.isArray(symbol?.parts) ? symbol.parts : [])
+    .map(part => ({
+      partOfSpeech: clean(part?.part || part?.part_name),
+      translations: uniqueValues(part?.means)
+    }))
+    .filter(part => part.partOfSpeech || part.translations.length);
+
+  const phoneticValues = symbols.flatMap(symbol => [
+    symbol?.ph_en ? `英 /${clean(symbol.ph_en)}/` : "",
+    symbol?.ph_am ? `美 /${clean(symbol.ph_am)}/` : "",
+    symbol?.ph_other ? clean(symbol.ph_other) : ""
+  ]).filter(Boolean);
+  const phonetic = [...new Set(phoneticValues)].join("  ");
+
+  const items = Array.isArray(edict.item) ? edict.item : [];
+  const senses = [];
+  const attachedTranslations = new Set();
+  for (const item of items) {
+    const partOfSpeech = clean(item?.pos);
+    const matchingParts = parts.filter(part => partOfSpeechMatches(partOfSpeech, part.partOfSpeech));
+    const translations = uniqueValues(matchingParts.flatMap(part => part.translations));
+    const groups = Array.isArray(item?.tr_group) ? item.tr_group : [];
+    for (const group of groups) {
+      const definitions = uniqueValues(group?.tr);
+      const examples = uniqueValues(group?.example);
+      const synonyms = uniqueValues(group?.similar_word);
+      const rows = definitions.length ? definitions : [""];
+      rows.forEach((definition, index) => {
+        const useTranslations = translations.length && !attachedTranslations.has(partOfSpeech) && index === 0
+          ? translations
+          : [];
+        if (useTranslations.length) attachedTranslations.add(partOfSpeech);
+        if (definition || useTranslations.length || examples.length) {
+          senses.push({
+            partOfSpeech,
+            definition,
+            translations: useTranslations,
+            examples: index === 0 ? examples : [],
+            synonyms
+          });
+        }
+      });
+    }
+    if (!groups.length && translations.length) {
+      senses.push({ partOfSpeech, definition: "", translations });
+      attachedTranslations.add(partOfSpeech);
+    }
+  }
+
+  if (!senses.length && parts.length) {
+    parts.forEach(part => senses.push({
+      partOfSpeech: part.partOfSpeech,
+      definition: "",
+      translations: part.translations
+    }));
+  }
+  if (!senses.length && Array.isArray(simpleMeans.word_means) && simpleMeans.word_means.length) {
+    senses.push({
+      partOfSpeech: "",
+      definition: "",
+      translations: uniqueValues(simpleMeans.word_means)
+    });
+  }
+  if (!senses.length) return null;
+
+  const exchange = simpleMeans.exchange || {};
+  const formLabels = {
+    word_third: "第三人称单数",
+    word_ing: "现在分词",
+    word_done: "过去分词",
+    word_past: "过去式",
+    word_pl: "复数",
+    word_er: "比较级",
+    word_est: "最高级"
+  };
+  const wordForms = Object.entries(formLabels)
+    .map(([key, label]) => ({ label, values: uniqueValues(exchange[key]) }))
+    .filter(item => item.values.length);
+  const tags = uniqueValues([simpleMeans.tags?.core, simpleMeans.tags?.other]);
+  const word = clean(simpleMeans.word_name || edict.word || query);
+  const audioUrl = /^https:\/\//i.test(clean(translationResult.src_tts)) ? clean(translationResult.src_tts) : "";
+
+  return {
+    type: "online-dictionary",
+    provider: "baidu-dictionary",
+    name: "百度词典版",
+    word,
+    phonetic,
+    audioUrl,
+    wordForms,
+    tags,
+    senses,
+    source: {
+      id: "baidu-dictionary",
+      name: "百度翻译·词典版",
+      license: "百度翻译 API",
+      url: BAIDU_DICTIONARY_DOC_URL
+    },
+    meta: {
+      senseCount: senses.length,
+      language: data.lang || ""
+    }
+  };
+}
+
+async function getBaiduAccessToken(config = {}) {
+  const apiKey = clean(config.apiKey);
+  const secretKey = clean(config.secretKey);
+  if (!apiKey || !secretKey) throw new Error("百度 API Key / Secret Key 未填写");
+  const cacheKey = `${apiKey}\u0000${secretKey}`;
+  const cached = baiduTokenCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now() + 60_000) return cached.accessToken;
+
+  const query = new URLSearchParams({
+    grant_type: "client_credentials",
+    client_id: apiKey,
+    client_secret: secretKey
+  });
+  const data = await fetchJson(`${BAIDU_TOKEN_URL}?${query.toString()}`, {
+    method: "POST",
+    headers: { Accept: "application/json" }
+  });
+  if (!data?.access_token) {
+    throw new Error(`百度鉴权失败${data?.error_description ? `：${data.error_description}` : ""}`);
+  }
+  const expiresIn = Math.max(60, Number(data.expires_in) || 2_592_000);
+  baiduTokenCache.set(cacheKey, {
+    accessToken: data.access_token,
+    expiresAt: Date.now() + expiresIn * 1000
+  });
+  return data.access_token;
+}
+
+async function translateBaiduDictionary(text, config = {}) {
+  const queryText = clean(text);
+  const accessToken = await getBaiduAccessToken(config);
+  const source = sourceForBaidu(config.source || (isBaiduDictionaryQuery(queryText) ? "en" : "auto"));
+  const target = targetForBaidu(config.target || "zh-CN");
+  const data = await fetchJson(`${BAIDU_DICTIONARY_URL}?access_token=${encodeURIComponent(accessToken)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ q: queryText, from: source, to: target })
+  }, 20000);
+  if (data?.error_code) {
+    throw new Error(`百度错误码 ${data.error_code}${data.error_msg ? `：${data.error_msg}` : ""}`);
+  }
+  const result = data?.result || {};
+  const rows = Array.isArray(result.trans_result) ? result.trans_result : [];
+  const translations = uniqueValues(rows.map(row => row?.dst));
+  const rowWithDictionary = rows.find(row => row?.dict);
+  const dictionaryEntry = rowWithDictionary
+    ? normalizeBaiduDictionary(rowWithDictionary.dict, queryText, rowWithDictionary)
+    : null;
+  return {
+    provider: "baidu",
+    name: "百度翻译",
+    detectedSource: clean(result.from || source),
+    translations,
+    dictionaryEntry,
+    source: {
+      id: "baidu-dictionary",
+      name: "百度翻译·词典版",
+      license: "百度翻译 API 条款",
+      url: BAIDU_DICTIONARY_DOC_URL
+    }
+  };
+}
+
+async function translateBaiduMany(texts, config = {}) {
+  const inputs = texts.map(clean).filter(Boolean);
+  return mapWithConcurrency(inputs, 3, async text => {
+    const result = await translateBaiduDictionary(text, config);
+    return clean(result.translations.join(" "));
+  });
+}
+
 function buildYoudaoPayload(text, config = {}, options = {}) {
   const now = typeof options === "number" ? options : options.now || Date.now();
   const salt = typeof options === "number" ? String(options) : (options.salt || crypto.randomUUID());
@@ -210,6 +471,19 @@ async function translateSegments(texts, settings = {}) {
     }
   }
 
+  if (translation.baidu?.enabled && translation.baidu.apiKey && translation.baidu.secretKey) {
+    try {
+      return {
+        translations: await translateBaiduMany(inputs, { ...translation.baidu, source, target }),
+        provider: "baidu",
+        name: "百度翻译",
+        warnings
+      };
+    } catch (error) {
+      warnings.push(`百度释义翻译：${error.message}`);
+    }
+  }
+
   return { translations: [], provider: "", name: "", warnings };
 }
 
@@ -220,6 +494,16 @@ async function translateText(text, settings = {}) {
   const target = translation.target || "zh-CN";
   const warnings = [];
   const tasks = [];
+  if (translation.baidu?.enabled && translation.baidu.apiKey && translation.baidu.secretKey) {
+    tasks.push(translateBaiduDictionary(query, {
+      ...translation.baidu,
+      source: isBaiduDictionaryQuery(query) ? "en" : source,
+      target
+    }).catch(error => {
+      warnings.push(`百度：${error.message}`);
+      return null;
+    }));
+  }
   if (translation.google?.enabled && (translation.google.apiKey || translation.google.mode === "web")) {
     tasks.push(translateGoogle(query, { ...translation.google, source, target }).catch(error => {
       warnings.push(`Google：${error.message}`);
@@ -244,10 +528,16 @@ async function translateText(text, settings = {}) {
 
 module.exports = {
   buildYoudaoPayload,
+  getBaiduAccessToken,
   inputForYoudao,
+  isBaiduDictionaryQuery,
+  normalizeBaiduDictionary,
+  targetForBaidu,
   translateGoogle,
   translateGoogleMany,
   translateGoogleWeb,
+  translateBaiduDictionary,
+  translateBaiduMany,
   translateSegments,
   translateText,
   translateYoudao,

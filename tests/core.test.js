@@ -10,7 +10,7 @@ const { normalizeFreeDictionary, normalizeMerriamItem } = require("../src/main/s
 const { chooseChemblCandidate, hasDrugIdentity } = require("../src/main/services/drugshop");
 const { parseSelectionLine } = require("../src/main/selection-monitor");
 const { lookupWord } = require("../src/main/services/word-lookup");
-const { buildYoudaoPayload } = require("../src/main/services/translation");
+const { buildYoudaoPayload, normalizeBaiduDictionary, targetForBaidu } = require("../src/main/services/translation");
 const { mergeSettings } = require("../src/main/store");
 
 test("normalizes a local bilingual dictionary entry", () => {
@@ -62,6 +62,53 @@ test("creates the v3 Youdao signature payload without exposing plaintext signing
   assert.equal(payload.sign.length, 64);
   assert.equal(payload.salt, "1700000000000");
   assert.equal(payload.curtime, "1700000000");
+});
+
+test("normalizes Baidu dictionary data into phonetics, senses and word forms", () => {
+  const entry = normalizeBaiduDictionary({
+    lang: "1",
+    word_result: {
+      edict: {
+        word: "fan",
+        item: [
+          {
+            pos: "noun",
+            tr_group: [{
+              tr: ["a device for moving air"],
+              example: ["The fan kept the room cool."],
+              similar_word: ["blower"]
+            }]
+          },
+          {
+            pos: "verb",
+            tr_group: [{ tr: ["move air with a fan"] }]
+          }
+        ]
+      }
+    },
+    simple_means: {
+      word_name: "fan",
+      exchange: { word_ing: ["fanning"], word_past: ["fanned"] },
+      symbols: [{
+        ph_en: "fæn",
+        ph_am: "fæn",
+        parts: [
+          { part: "n.", means: ["风扇", "粉丝"] },
+          { part: "v.", means: ["扇动"] }
+        ]
+      }]
+    }
+  }, "fan");
+  assert.equal(targetForBaidu("zh-CN"), "zh");
+  assert.equal(entry.word, "fan");
+  assert.equal(entry.phonetic, "英 /fæn/  美 /fæn/");
+  assert.deepEqual(entry.wordForms, [
+    { label: "现在分词", values: ["fanning"] },
+    { label: "过去式", values: ["fanned"] }
+  ]);
+  assert.deepEqual(entry.senses.find(sense => sense.partOfSpeech === "noun").translations, ["风扇", "粉丝"]);
+  assert.ok(entry.senses.some(sense => sense.partOfSpeech === "verb" && sense.translations[0] === "扇动"));
+  assert.equal(entry.senses[0].examples[0], "The fan kept the room cool.");
 });
 
 test("normalizes a Merriam-Webster response shape", () => {
@@ -202,6 +249,36 @@ test("combines an online dictionary entry with translated senses and whole-word 
   assert.equal(result.cloudResults[0].translations[0], "风扇");
 });
 
+test("prefers a Baidu dictionary payload and keeps other providers as translation supplements", async () => {
+  const baiduEntry = {
+    type: "online-dictionary",
+    provider: "baidu-dictionary",
+    name: "百度词典版",
+    word: "fan",
+    senses: [{ partOfSpeech: "noun", translations: ["风扇", "粉丝"], definition: "a device or admirer" }]
+  };
+  const result = await lookupWord("fan", {
+    dictionaryManager: {
+      searchLocal: async () => ({ exactResults: [], suggestions: [], warnings: [], sources: [] })
+    },
+    settings: mergeSettings({ translation: { baidu: { enabled: true, apiKey: "key", secretKey: "secret" } } }),
+    queryDictionary: async () => null,
+    translate: async () => ({
+      source: "en",
+      target: "zh-CN",
+      results: [
+        { provider: "baidu", dictionaryEntry: baiduEntry, translations: ["扇子"], name: "百度翻译" },
+        { provider: "google", translations: ["风扇"], name: "Google" }
+      ],
+      warnings: []
+    })
+  });
+  assert.equal(result.strategy, "online-dictionary");
+  assert.equal(result.dictionaryResults[0].provider, "baidu-dictionary");
+  assert.deepEqual(result.dictionaryResults[0].senses[0].translations, ["风扇", "粉丝"]);
+  assert.deepEqual(result.cloudResults.map(item => item.provider), ["google"]);
+});
+
 test("decodes UTF-8 selection messages from the Windows helper", () => {
   const encoded = Buffer.from("aspirin 阿司匹林", "utf8").toString("base64");
   assert.deepEqual(parseSelectionLine(`TEXT\t${encoded}`), {
@@ -253,6 +330,8 @@ test("defaults to automatic selection and Google web fallback without storing a 
   assert.equal(settings.translation.google.enabled, true);
   assert.equal(settings.translation.google.mode, "web");
   assert.equal(settings.translation.google.apiKey, "");
+  assert.equal(settings.translation.baidu.enabled, false);
+  assert.equal(settings.translation.baidu.apiKey, "");
 });
 
 test("preserves a configured result font scale", () => {
