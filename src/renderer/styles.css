@@ -267,16 +267,39 @@ button:disabled { cursor: wait; opacity: .62; }
 }
 
 .result-body { padding: 11px 12px 12px; }
+.dictionary-entry + .dictionary-entry { border-top: 1px solid #eeeeec; }
 .word-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; margin-bottom: 9px; }
 .word-head strong { color: #24272c; font-family: Georgia, "Segoe UI", serif; font-size: 20px; }
 .phonetic { color: #7080a0; font-family: Georgia, serif; font-size: 12px; }
-.sense { padding: 9px 0; border-top: 1px solid #f0f0ee; }
-.sense:first-of-type { border-top: 0; }
-.part-of-speech { display: inline-block; margin-bottom: 5px; color: var(--orange); font-size: 10px; font-style: italic; font-weight: 700; }
+.audio-button { display: inline-grid; width: 23px; height: 23px; place-items: center; border: 1px solid #e0e5f1; border-radius: 50%; color: #5d72a9; background: #f4f6fb; font-size: 8px; }
+.audio-button:hover { color: white; background: var(--blue); }
+.meaning-group { padding-top: 8px; border-top: 1px solid #eeeeec; }
+.meaning-group + .meaning-group { margin-top: 7px; }
+.meaning-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 0 4px; }
+.meaning-heading strong { color: var(--orange); font-size: 10px; font-weight: 750; }
+.meaning-heading span { color: #a1a4a8; font-size: 9px; }
+.sense { display: grid; grid-template-columns: 19px minmax(0, 1fr); gap: 7px; padding: 8px 0; border-top: 1px dashed #eeeef0; }
+.meaning-heading + .sense { border-top: 0; }
+.sense-number { display: grid; width: 18px; height: 18px; margin-top: 1px; place-items: center; border-radius: 50%; color: #7180a1; background: #f0f3f9; font-size: 9px; font-weight: 700; }
+.sense-copy { min-width: 0; }
+.sense-translation { margin-bottom: 3px; color: #1d725d; font-size: 12px; font-weight: 650; line-height: 1.55; user-select: text; }
 .definition { color: #3e4248; font-size: 12px; line-height: 1.6; user-select: text; }
 .translations { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
 .translation-chip { padding: 3px 6px; border-radius: 5px; color: #1f7860; background: #eaf6f1; font-size: 11px; user-select: text; }
 .example { margin-top: 6px; padding-left: 8px; border-left: 2px solid #e5e6e4; color: #777d85; font-family: Georgia, "Microsoft YaHei UI", serif; font-size: 10px; line-height: 1.55; user-select: text; }
+.example div + div { margin-top: 3px; }
+.example span { margin-right: 5px; color: #9a7b55; font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif; font-size: 9px; font-weight: 700; }
+.sense-related { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; color: #979ba1; font-size: 9px; }
+.sense-related > span { margin-right: 2px; font-weight: 700; }
+.sense-related em { padding: 2px 5px; border-radius: 4px; color: #667491; background: #f2f4f8; font-style: normal; }
+.dictionary-source-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 9px; padding-top: 8px; border-top: 1px solid #eeeeec; color: #999da3; font-size: 9px; }
+.dictionary-source-row a { color: #6578a5; }
+
+.whole-word-translation { padding: 10px 12px 12px; border-top: 1px solid #eeeeec; background: #fafbfc; }
+.whole-word-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 9px; }
+.whole-word-heading strong { color: #50555c; font-size: 11px; }
+.whole-word-heading span { color: #9a9ea4; font-size: 8px; text-align: right; }
+.result-body > .whole-word-translation { padding: 0; border-top: 0; background: transparent; }
 
 .cloud-result { padding: 2px 0 8px; }
 .cloud-result + .cloud-result { padding-top: 10px; border-top: 1px solid #efefed; }
@@ -404,6 +427,7 @@ kbd { padding: 1px 4px; border: 1px solid #d5d6d4; border-bottom-width: 2px; bor
 .provider-check { display: flex; align-items: center; gap: 7px; color: #4a4e54; font-size: 11px; }
 .provider-check input, .check-row input { width: 14px; height: 14px; accent-color: var(--blue); }
 .provider-logo { display: grid; width: 20px; height: 20px; place-items: center; border-radius: 6px; font-size: 10px; font-weight: 750; }
+.dictionary-logo { color: white; background: linear-gradient(135deg, #6678a8, #4f9b86); }
 .google-logo { color: white; background: linear-gradient(135deg, #4285f4 25%, #34a853 25% 50%, #fbbc05 50% 75%, #ea4335 75%); }
 .youdao-logo { color: white; background: #df4545; }
 .provider-title-row select { max-width: 150px; height: 27px; padding: 0 5px; border: 1px solid #dcdddb; border-radius: 6px; color: #666a70; background: #f8f8f6; font-size: 9px; }

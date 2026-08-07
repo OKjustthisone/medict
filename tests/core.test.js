@@ -4,7 +4,7 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const { DictionaryManager, normalizeEntry, parseCsv } = require("../src/main/dictionary-manager");
-const { normalizeMerriamItem } = require("../src/main/services/dictionary-api");
+const { normalizeFreeDictionary, normalizeMerriamItem } = require("../src/main/services/dictionary-api");
 const { hasDrugIdentity } = require("../src/main/services/drugshop");
 const { parseSelectionLine } = require("../src/main/selection-monitor");
 const { lookupWord } = require("../src/main/services/word-lookup");
@@ -73,14 +73,57 @@ test("normalizes a Merriam-Webster response shape", () => {
   assert.equal(entry.entries[0].definitions[0].definition, "something that serves as a model");
 });
 
+test("normalizes Free Dictionary phonetics, parts of speech, homographs and examples", () => {
+  const entry = normalizeFreeDictionary([
+    {
+      word: "fan",
+      phonetic: "/fæn/",
+      phonetics: [{ text: "/fæn/", audio: "//example.test/fan.mp3" }],
+      meanings: [
+        {
+          partOfSpeech: "noun",
+          definitions: [
+            { definition: "A hand-held device used to move air." },
+            { definition: "An electrical device for moving air." }
+          ]
+        },
+        {
+          partOfSpeech: "verb",
+          definitions: [{ definition: "To blow air on something.", example: "She fanned the fire." }]
+        }
+      ],
+      sourceUrls: ["https://en.wiktionary.org/wiki/fan"],
+      license: { name: "CC BY-SA 3.0", url: "https://creativecommons.org/licenses/by-sa/3.0" }
+    },
+    {
+      word: "fan",
+      meanings: [{
+        partOfSpeech: "noun",
+        definitions: [{ definition: "A person who admires someone or something.", example: "He is a football fan." }]
+      }]
+    }
+  ], "fan");
+  assert.equal(entry.word, "fan");
+  assert.equal(entry.phonetic, "/fæn/");
+  assert.equal(entry.audioUrl, "https://example.test/fan.mp3");
+  assert.ok(entry.senses.some(sense => sense.partOfSpeech === "verb" && sense.examples[0] === "She fanned the fire."));
+  assert.ok(entry.senses.some(sense => sense.definition.includes("person who admires")));
+  assert.equal(entry.source.license, "CC BY-SA 3.0");
+});
+
 test("uses an exact local dictionary hit without calling a cloud provider", async () => {
   let cloudCalls = 0;
+  let dictionaryCalls = 0;
   const localEntry = { word: "serendipity", senses: [{ definition: "a fortunate discovery" }] };
   const result = await lookupWord("serendipity", {
     dictionaryManager: {
       searchLocal: async () => ({ exactResults: [localEntry], suggestions: [], warnings: [], sources: [] })
     },
     settings: mergeSettings({}),
+    queryDictionary: async () => {
+      dictionaryCalls += 1;
+      return null;
+    },
     translate: async () => {
       cloudCalls += 1;
       return { results: [], warnings: [] };
@@ -89,6 +132,7 @@ test("uses an exact local dictionary hit without calling a cloud provider", asyn
   assert.equal(result.strategy, "local");
   assert.equal(result.localResults[0].word, "serendipity");
   assert.equal(cloudCalls, 0);
+  assert.equal(dictionaryCalls, 0);
 });
 
 test("falls back to enabled cloud lookup when local dictionaries miss", async () => {
@@ -98,6 +142,7 @@ test("falls back to enabled cloud lookup when local dictionaries miss", async ()
       searchLocal: async () => ({ exactResults: [], suggestions: [], warnings: [], sources: [] })
     },
     settings: mergeSettings({}),
+    queryDictionary: async () => null,
     translate: async query => {
       cloudCalls += 1;
       return {
@@ -112,6 +157,47 @@ test("falls back to enabled cloud lookup when local dictionaries miss", async ()
   assert.equal(result.cloudResults[0].translations[0], "serendipity-中文");
   assert.deepEqual(result.providers, ["google"]);
   assert.equal(cloudCalls, 1);
+});
+
+test("combines an online dictionary entry with translated senses and whole-word translation", async () => {
+  const dictionaryEntry = normalizeFreeDictionary([{
+    word: "fan",
+    phonetic: "/fæn/",
+    meanings: [{
+      partOfSpeech: "noun",
+      definitions: [
+        { definition: "A device for moving air." },
+        { definition: "A person who admires someone.", example: "She is a fan of the band." }
+      ]
+    }]
+  }], "fan");
+  const result = await lookupWord("fan", {
+    dictionaryManager: {
+      searchLocal: async () => ({ exactResults: [], suggestions: [], warnings: [], sources: [] })
+    },
+    settings: mergeSettings({}),
+    queryDictionary: async () => dictionaryEntry,
+    translate: async () => ({
+      source: "en",
+      target: "zh-CN",
+      results: [{ provider: "google", name: "Google", translations: ["风扇"] }],
+      warnings: []
+    }),
+    translateSegments: async texts => ({
+      translations: texts.map((_, index) => index === 0 ? "使空气流动的设备。" : "喜爱某人或某物的人。"),
+      provider: "google",
+      name: "Google Cloud Translation",
+      warnings: []
+    })
+  });
+  assert.equal(result.strategy, "online-dictionary");
+  assert.equal(result.dictionaryResults[0].phonetic, "/fæn/");
+  assert.deepEqual(result.dictionaryResults[0].senses.map(sense => sense.translations[0]), [
+    "使空气流动的设备。",
+    "喜爱某人或某物的人。"
+  ]);
+  assert.equal(result.dictionaryResults[0].translationProvider.name, "Google Cloud Translation");
+  assert.equal(result.cloudResults[0].translations[0], "风扇");
 });
 
 test("decodes UTF-8 selection messages from the Windows helper", () => {

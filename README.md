@@ -2,13 +2,13 @@
 
 Medict 是一个面向 Windows 的小型桌面查词窗口。界面参考 [pot-desktop](https://github.com/pot-app/pot-desktop) 的轻量弹窗思路，但查询模型只有一个输入框和两个动作：
 
-- **查词**：先查本地词典的精确词条；没有命中时，再调用已启用的 Google / 有道服务。
+- **查词**：先查本地词典的精确词条；没有命中时，用 Free Dictionary 获取音标、词性、多义项和例句，再由 Google / 有道补充中文释义和整词翻译。
 - **药物查询**：调用从 `drugshop` 集成的完整公开数据查询链路。
 - **自动划词**：在其他 Windows 应用中用鼠标选中文本后，同时执行上面两条查询，并弹出同一个结果窗口；不是药物时明确显示“未找到该药物”。
 
 ## 当前可运行范围
 
-本轮按需求暂不安装本地词典。应用默认启用 Google 免密钥兼容模式，因此安装依赖后即可测试云端查词；设置里也可以切换到 Google Cloud Translation API，或填写有道智云 App ID / App Secret。
+本轮按需求暂不安装本地词典。英文单词会自动调用免密钥的 [Free Dictionary API](https://dictionaryapi.dev/)；应用默认启用 Google 免密钥兼容模式，为每条英文释义补充中文翻译。设置里也可以切换到 Google Cloud Translation API，或填写有道智云 App ID / App Secret。短语和长文本不走词典义项，直接进入翻译流程。
 
 药物查询并行聚合以下公开服务：
 
@@ -46,7 +46,10 @@ npm.cmd run dist
    │
    ├─ 本地词典精确命中 ─→ 直接显示本地释义，不访问云端
    │
-   └─ 本地未命中 ─────→ Google / 有道云端回退
+   └─ 本地未命中
+        ├─ 单个英文词 ─→ Free Dictionary 完整义项
+        │                 └─ Google / 有道补充中文释义
+        └─ 短语或文本 ─→ Google / 有道直接翻译
 
 划词事件同时启动：
    ├─ 上面的普通查词流程
@@ -70,6 +73,8 @@ GoldenDict 不是单一词典文件格式，它常用 StarDict、DSL、Dictd、M
 
 Oxford Advanced Learner's、Longman 和 Merriam-Webster 的完整词典内容并不因为可下载就自动成为开源内容。Medict 只提供格式适配和查询接口，不随程序分发这些词典；用户需要确认自己导入内容的许可证和使用权限。
 
+当前在线英英释义来自 Free Dictionary API。应用显示接口响应中附带的原始词条链接和许可证信息，不复制或打包其词典数据库；若该公共服务不可用，Google / 有道整词翻译仍可独立返回。
+
 ## Google 模式说明
 
 默认的“免密钥兼容模式”用于快速试用，调用 Google 翻译的兼容接口，接口可能随服务调整而变化。需要稳定生产使用时，建议在设置中切换到正式 Google Cloud Translation API。API Key 和有道密钥保存在 Electron 用户数据目录，不会提交到 Git；后续版本应再接入 Windows Credential Manager / Electron `safeStorage`。
@@ -81,6 +86,7 @@ src/renderer/                 紧凑单窗口 UI
 src/main/main.js              窗口、托盘、并行查询和 IPC
 src/main/dictionary-manager.js 本地词典索引边界
 src/main/services/word-lookup.js 本地优先 / 云端回退编排
+src/main/services/dictionary-api.js Free Dictionary / Oxford / Merriam-Webster 适配
 src/main/services/translation.js Google / 有道适配
 src/main/services/drugshop.js DrugShop 公开数据库聚合
 src/main/selection-monitor.js Windows 划词助手进程管理

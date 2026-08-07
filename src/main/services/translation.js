@@ -5,6 +5,20 @@ function clean(value) {
   return String(value ?? "").trim();
 }
 
+async function mapWithConcurrency(values, limit, worker) {
+  const rows = new Array(values.length);
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(Math.max(1, limit), values.length) }, async () => {
+    while (cursor < values.length) {
+      const index = cursor;
+      cursor += 1;
+      rows[index] = await worker(values[index], index);
+    }
+  });
+  await Promise.all(runners);
+  return rows;
+}
+
 function targetForYoudao(value) {
   const normalized = clean(value).toLowerCase();
   return normalized === "zh-cn" || normalized === "zh" ? "zh-CHS" : normalized === "en-us" ? "en" : normalized;
@@ -69,6 +83,34 @@ async function translateGoogle(text, config = {}) {
   };
 }
 
+async function translateGoogleMany(texts, config = {}) {
+  const inputs = texts.map(clean).filter(Boolean);
+  if (!inputs.length) return [];
+  if (!config.apiKey || config.mode === "web") {
+    return mapWithConcurrency(inputs, 4, async text => {
+      const result = await translateGoogleWeb(text, config);
+      return clean(result.translations.join(" "));
+    });
+  }
+  const query = new URLSearchParams({ key: config.apiKey });
+  const body = {
+    q: inputs,
+    target: config.target || "zh-CN",
+    format: "text"
+  };
+  if (config.source && config.source !== "auto") body.source = config.source;
+  const data = await fetchJson(`https://translation.googleapis.com/language/translate/v2?${query.toString()}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  }, 20000);
+  const translations = data?.data?.translations || [];
+  if (translations.length !== inputs.length) {
+    throw new Error(`批量释义翻译返回 ${translations.length}/${inputs.length} 条`);
+  }
+  return translations.map(item => clean(item.translatedText));
+}
+
 async function translateGoogleWeb(text, config = {}) {
   const query = new URLSearchParams({
     client: "gtx",
@@ -124,6 +166,53 @@ async function translateYoudao(text, config = {}) {
   };
 }
 
+async function translateYoudaoMany(texts, config = {}) {
+  const inputs = texts.map(clean).filter(Boolean);
+  return mapWithConcurrency(inputs, 3, async text => {
+    const result = await translateYoudao(text, config);
+    return clean(result.translations[0]);
+  });
+}
+
+async function translateSegments(texts, settings = {}) {
+  const inputs = texts.map(clean).filter(Boolean);
+  const translation = settings.translation || {};
+  const source = "en";
+  const target = translation.target || "zh-CN";
+  const warnings = [];
+  if (!inputs.length || /^en(?:-|$)/i.test(target)) {
+    return { translations: [], provider: "", name: "", warnings };
+  }
+
+  if (translation.google?.enabled && (translation.google.apiKey || translation.google.mode === "web")) {
+    try {
+      return {
+        translations: await translateGoogleMany(inputs, { ...translation.google, source, target }),
+        provider: "google",
+        name: translation.google.mode === "web" ? "Google 翻译" : "Google Cloud Translation",
+        warnings
+      };
+    } catch (error) {
+      warnings.push(`Google 释义翻译：${error.message}`);
+    }
+  }
+
+  if (translation.youdao?.enabled && translation.youdao.appKey && translation.youdao.appSecret) {
+    try {
+      return {
+        translations: await translateYoudaoMany(inputs, { ...translation.youdao, source, target }),
+        provider: "youdao",
+        name: "有道智云翻译",
+        warnings
+      };
+    } catch (error) {
+      warnings.push(`有道释义翻译：${error.message}`);
+    }
+  }
+
+  return { translations: [], provider: "", name: "", warnings };
+}
+
 async function translateText(text, settings = {}) {
   const query = clean(text);
   const translation = settings.translation || {};
@@ -157,7 +246,10 @@ module.exports = {
   buildYoudaoPayload,
   inputForYoudao,
   translateGoogle,
+  translateGoogleMany,
   translateGoogleWeb,
+  translateSegments,
   translateText,
-  translateYoudao
+  translateYoudao,
+  translateYoudaoMany
 };

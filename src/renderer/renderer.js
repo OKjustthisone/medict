@@ -41,7 +41,7 @@
     const localCount = state.sources.reduce((sum, source) => sum + Number(source.entryCount || 0), 0);
     const localMessage = localCount
       ? `已加载 ${localCount.toLocaleString()} 条本地词条；精确命中时不会访问云端。`
-      : "当前未安装本地词典，普通查词会直接使用 Google 云端回退。";
+      : "当前未安装本地词典；英文单词会查询在线词典，再用 Google / 有道补充中文释义。";
     $("#results").innerHTML = `<div class="empty-state"><div><span class="empty-state-icon">M</span><strong>一个输入框，两种查询</strong><p>${esc(localMessage)} 鼠标划词时，两种查询会同时执行。</p></div></div>`;
   }
 
@@ -65,18 +65,72 @@
 
   function sourceBadge(result) {
     if (result.strategy === "local") return result.localResults?.[0]?.source?.name || "本地词典";
+    if (result.dictionaryResults?.length) {
+      const dictionary = result.dictionaryResults[0];
+      const count = Number(dictionary.meta?.senseCount || dictionary.senses?.length || 0);
+      return `${dictionary.name || dictionary.source?.name || "在线词典"}${count ? ` · ${count} 义` : ""}`;
+    }
     const names = (result.cloudResults || []).map(item => item.name || item.provider).filter(Boolean);
-    return names.join(" + ") || "云端回退";
+    return names.join(" + ") || "在线查询";
   }
 
-  function renderSense(sense) {
-    const translations = values(sense.translations).map(item => `<span class="translation-chip">${esc(item)}</span>`).join("");
-    const examples = values(sense.examples).map(esc).join("<br>");
-    return `<div class="sense">${sense.partOfSpeech ? `<span class="part-of-speech">${esc(sense.partOfSpeech)}</span>` : ""}<div class="definition">${esc(sense.definition || "暂无英文释义")}</div>${translations ? `<div class="translations">${translations}</div>` : ""}${examples ? `<div class="example">${examples}</div>` : ""}</div>`;
+  function partOfSpeechLabel(value) {
+    const normalized = clean(value).toLowerCase();
+    const labels = {
+      noun: "名词 · noun",
+      verb: "动词 · verb",
+      adjective: "形容词 · adjective",
+      adverb: "副词 · adverb",
+      pronoun: "代词 · pronoun",
+      preposition: "介词 · preposition",
+      conjunction: "连词 · conjunction",
+      interjection: "感叹词 · interjection",
+      exclamation: "感叹词 · exclamation",
+      determiner: "限定词 · determiner",
+      numeral: "数词 · numeral"
+    };
+    return labels[normalized] || clean(value) || "其他释义";
   }
 
-  function renderLocalEntry(entry) {
-    return `<div class="result-body"><div class="word-head"><strong>${esc(entry.word)}</strong>${entry.phonetic ? `<span class="phonetic">${esc(entry.phonetic)}</span>` : ""}</div>${values(entry.senses).map(renderSense).join("")}</div>`;
+  function groupSenses(senses) {
+    const groups = new Map();
+    values(senses).forEach(sense => {
+      const key = clean(sense.partOfSpeech).toLowerCase() || "other";
+      if (!groups.has(key)) groups.set(key, { partOfSpeech: sense.partOfSpeech, senses: [] });
+      groups.get(key).senses.push(sense);
+    });
+    return [...groups.values()];
+  }
+
+  function renderRelated(label, items) {
+    const rows = values(items).map(clean).filter(Boolean).slice(0, 8);
+    if (!rows.length) return "";
+    return `<div class="sense-related"><span>${esc(label)}</span>${rows.map(item => `<em>${esc(item)}</em>`).join("")}</div>`;
+  }
+
+  function renderSense(sense, index) {
+    const translations = values(sense.translations).map(clean).filter(Boolean);
+    const examples = values(sense.examples).map(clean).filter(Boolean);
+    return `<div class="sense"><span class="sense-number">${index + 1}</span><div class="sense-copy">${translations.length ? `<div class="sense-translation">${translations.map(esc).join("；")}</div>` : ""}<div class="definition">${esc(sense.definition || "暂无英文释义")}</div>${examples.length ? `<div class="example">${examples.map(example => `<div><span>例</span>${esc(example)}</div>`).join("")}</div>` : ""}${renderRelated("近义", sense.synonyms)}${renderRelated("反义", sense.antonyms)}</div></div>`;
+  }
+
+  function renderDictionaryEntry(entry) {
+    const groups = groupSenses(entry.senses);
+    const audio = entry.audioUrl
+      ? `<button class="audio-button" type="button" data-audio-url="${esc(entry.audioUrl)}" title="播放发音" aria-label="播放发音">▶</button>`
+      : "";
+    const sourceUrl = entry.source?.url;
+    const sourceName = entry.source?.name || entry.name || "词典来源";
+    const source = sourceUrl
+      ? `<a href="#" data-external-url="${esc(sourceUrl)}">${esc(sourceName)}</a>`
+      : esc(sourceName);
+    const translator = entry.translationProvider?.name
+      ? `<span>中文释义：${esc(entry.translationProvider.name)}</span>`
+      : "";
+    const sourceMeta = entry.source
+      ? `<div class="dictionary-source-row"><span>${source}${entry.source.license ? ` · ${esc(entry.source.license)}` : ""}</span>${translator}</div>`
+      : "";
+    return `<div class="dictionary-entry result-body"><div class="word-head"><strong>${esc(entry.word)}</strong>${entry.phonetic ? `<span class="phonetic">${esc(entry.phonetic)}</span>` : ""}${audio}</div>${groups.map(group => `<section class="meaning-group"><div class="meaning-heading"><strong>${esc(partOfSpeechLabel(group.partOfSpeech))}</strong><span>${group.senses.length} 个义项</span></div>${group.senses.map(renderSense).join("")}</section>`).join("")}${sourceMeta}</div>`;
   }
 
   function renderCloudResult(result) {
@@ -86,6 +140,12 @@
       ? `<a href="#" data-external-url="${esc(sourceUrl)}">${esc(result.name || result.provider || "云端服务")}</a>`
       : esc(result.name || result.provider || "云端服务");
     return `<div class="cloud-result"><div class="cloud-provider"><span>${provider}</span><span>${result.detectedSource ? `${esc(result.detectedSource)} → ` : ""}${esc(state.settings?.translation?.target || "zh-CN")}</span></div><div class="cloud-translation">${translations}</div>${result.mode === "web" ? '<div class="cloud-meta">Google 免密钥兼容模式</div>' : ""}</div>`;
+  }
+
+  function renderCloudReference(results) {
+    const rows = values(results);
+    if (!rows.length) return "";
+    return `<div class="whole-word-translation"><div class="whole-word-heading"><strong>整词翻译</strong><span>仅供快速参考，完整含义以上方词典义项为准</span></div>${rows.map(renderCloudResult).join("")}</div>`;
   }
 
   function renderSuggestions(suggestions) {
@@ -104,9 +164,11 @@
     const heading = `<div class="result-block-heading"><div class="heading-title"><span class="heading-label">WORD</span><h2>${esc(query)}</h2></div><span class="source-badge">${esc(sourceBadge(result))}</span></div>`;
     let content = "";
     if (result.strategy === "local" && result.localResults?.length) {
-      content = result.localResults.map(renderLocalEntry).join("");
+      content = result.localResults.map(renderDictionaryEntry).join("");
+    } else if (result.dictionaryResults?.length) {
+      content = `${result.dictionaryResults.map(renderDictionaryEntry).join("")}${renderCloudReference(result.cloudResults)}${renderSuggestions(result.suggestions)}`;
     } else if (result.cloudResults?.length) {
-      content = `<div class="result-body">${result.cloudResults.map(renderCloudResult).join("")}${renderSuggestions(result.suggestions)}</div>`;
+      content = `<div class="result-body">${renderCloudReference(result.cloudResults)}${renderSuggestions(result.suggestions)}</div>`;
     } else {
       const configured = values(result.providers).length > 0;
       content = `<div class="notice ${configured ? "warning" : ""}"><strong>${configured ? "云端没有返回结果" : "未配置可用的云端服务"}</strong>${configured ? "请检查网络或展开下方错误信息。" : "在设置中启用 Google 兼容模式，或填写 Google Cloud / 有道凭据。"}${renderSuggestions(result.suggestions)}</div>`;
@@ -249,7 +311,7 @@
     const requestId = ++state.requestId;
     state.activeSelectionRequestId = null;
     setBusy(true);
-    setRequestStatus(kind === "drug" ? "正在查询 DrugShop…" : "本地优先查词中…");
+    setRequestStatus(kind === "drug" ? "正在查询 DrugShop…" : "正在查询词典与翻译…");
     showLoading(kind, query);
     try {
       const result = kind === "drug" ? await api.lookupDrug(query) : await api.lookupWord(query);
@@ -257,7 +319,11 @@
       renderResults(kind === "drug" ? { drug: result } : { word: result });
       setRequestStatus(kind === "drug"
         ? (result.success ? "药物数据已返回" : "未找到该药物")
-        : (result.strategy === "local" ? "本地词典命中" : result.success ? "云端回退完成" : "云端未返回结果"), result.success === false ? "error" : "");
+        : (result.strategy === "local"
+          ? "本地词典命中"
+          : result.dictionaryResults?.length
+            ? "在线词典已返回"
+            : result.success ? "翻译已返回" : "在线查询未返回结果"), result.success === false ? "error" : "");
     } catch (error) {
       if (requestId !== state.requestId) return;
       renderResults(kind === "drug" ? { drug: null, errors: { drug: error.message || String(error) } } : { word: null, errors: { word: error.message || String(error) } });
@@ -400,6 +466,12 @@
     });
 
     document.addEventListener("click", event => {
+      const audioButton = event.target.closest("[data-audio-url]");
+      if (audioButton) {
+        const audio = new Audio(audioButton.dataset.audioUrl);
+        audio.play().catch(error => setRequestStatus(`发音播放失败：${error.message || error}`, "error"));
+        return;
+      }
       const queryButton = event.target.closest("[data-query-word]");
       if (queryButton) {
         $("#query-input").value = queryButton.dataset.queryWord;

@@ -1,10 +1,16 @@
 const DEFAULT_TIMEOUT = 12000;
+const SYSTEM_NETWORK_HOSTS = new Set([
+  "api.dictionaryapi.dev",
+  "translate.googleapis.com",
+  "translation.googleapis.com"
+]);
+const MAX_FREE_DICTIONARY_SENSES = 36;
 
 async function runtimeFetch(url, options) {
   const hostname = (() => {
     try { return new URL(String(url)).hostname.toLowerCase(); } catch (_) { return ""; }
   })();
-  const useSystemNetworkFirst = process.versions?.electron && (hostname === "translate.googleapis.com" || hostname === "translation.googleapis.com");
+  const useSystemNetworkFirst = process.versions?.electron && SYSTEM_NETWORK_HOSTS.has(hostname);
   if (useSystemNetworkFirst) {
     try {
       const { net } = require("electron");
@@ -52,6 +58,118 @@ function clean(value) {
 
 function unique(values) {
   return [...new Set(values.map(clean).filter(Boolean))];
+}
+
+function isEnglishDictionaryQuery(value) {
+  return /^[a-z][a-z'-]{0,63}$/i.test(clean(value));
+}
+
+function absoluteHttpsUrl(value) {
+  const url = clean(value);
+  if (url.startsWith("//")) return `https:${url}`;
+  return /^https:\/\//i.test(url) ? url : "";
+}
+
+function normalizeFreeDictionary(data, query) {
+  const entries = Array.isArray(data) ? data.filter(item => item && typeof item === "object") : [];
+  if (!entries.length) return null;
+
+  const groups = entries.flatMap((entry, entryIndex) => (entry.meanings || []).map((meaning, meaningIndex) => ({
+    entryIndex,
+    meaningIndex,
+    partOfSpeech: clean(meaning.partOfSpeech),
+    definitions: (meaning.definitions || []).map(item => ({
+      definition: clean(item.definition),
+      examples: unique([item.example]),
+      synonyms: unique([...(meaning.synonyms || []), ...(item.synonyms || [])]).slice(0, 12),
+      antonyms: unique([...(meaning.antonyms || []), ...(item.antonyms || [])]).slice(0, 12)
+    })).filter(item => item.definition)
+  }))).filter(group => group.definitions.length);
+
+  // Round-robin across homographs and parts of speech. This keeps distinct common
+  // meanings (for example fan=扇子 and fan=粉丝) near the top without dropping
+  // the less common senses returned by the source.
+  const senses = [];
+  const seenSenses = new Set();
+  const depth = Math.max(0, ...groups.map(group => group.definitions.length));
+  senseLoop:
+  for (let definitionIndex = 0; definitionIndex < depth; definitionIndex += 1) {
+    for (const group of groups) {
+      const item = group.definitions[definitionIndex];
+      if (!item) continue;
+      const key = `${group.partOfSpeech.toLowerCase()}\u0000${item.definition.toLowerCase()}`;
+      if (seenSenses.has(key)) continue;
+      seenSenses.add(key);
+      senses.push({
+        partOfSpeech: group.partOfSpeech,
+        definition: item.definition,
+        translations: [],
+        examples: item.examples,
+        synonyms: item.synonyms,
+        antonyms: item.antonyms,
+        homograph: group.entryIndex + 1
+      });
+      if (senses.length >= MAX_FREE_DICTIONARY_SENSES) break senseLoop;
+    }
+  }
+  if (!senses.length) return null;
+
+  const phonetics = [];
+  const seenPhonetics = new Set();
+  for (const entry of entries) {
+    const rows = [
+      ...(entry.phonetics || []),
+      ...(entry.phonetic ? [{ text: entry.phonetic }] : [])
+    ];
+    for (const row of rows) {
+      const text = clean(row?.text);
+      const audioUrl = absoluteHttpsUrl(row?.audio);
+      const key = `${text}\u0000${audioUrl}`;
+      if ((!text && !audioUrl) || seenPhonetics.has(key)) continue;
+      seenPhonetics.add(key);
+      phonetics.push({ text, audioUrl });
+    }
+  }
+
+  const word = clean(entries.find(entry => entry.word)?.word || query);
+  const sourceUrls = unique(entries.flatMap(entry => entry.sourceUrls || []));
+  const license = entries.find(entry => entry.license?.name)?.license || {};
+  const phonetic = phonetics.find(item => item.text)?.text || "";
+  const audioUrl = phonetics.find(item => item.audioUrl)?.audioUrl || "";
+
+  return {
+    type: "online-dictionary",
+    provider: "free-dictionary",
+    name: "Free Dictionary",
+    word,
+    phonetic,
+    phonetics,
+    audioUrl,
+    senses,
+    source: {
+      id: "free-dictionary",
+      name: "Free Dictionary",
+      license: clean(license.name || "Source-provided license"),
+      licenseUrl: absoluteHttpsUrl(license.url),
+      url: sourceUrls.find(url => /^https:\/\//i.test(url)) || `https://en.wiktionary.org/wiki/${encodeURIComponent(word)}`
+    },
+    meta: {
+      entryCount: entries.length,
+      senseCount: senses.length
+    }
+  };
+}
+
+async function queryFreeDictionary(query) {
+  const word = clean(query).toLowerCase();
+  if (!isEnglishDictionaryQuery(word)) return null;
+  try {
+    const data = await fetchJson(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`, {}, 16000);
+    return normalizeFreeDictionary(data, word);
+  } catch (error) {
+    if (error.status === 404) return null;
+    throw error;
+  }
 }
 
 function oxfordSenseRows(senses = []) {
@@ -193,9 +311,12 @@ async function queryMerriamWebster(query, config = {}) {
 
 module.exports = {
   fetchJson,
+  isEnglishDictionaryQuery,
+  normalizeFreeDictionary,
   runtimeFetch,
   normalizeMerriamItem,
   normalizeOxford,
+  queryFreeDictionary,
   queryMerriamWebster,
   queryOxford
 };
