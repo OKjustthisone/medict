@@ -16,7 +16,8 @@ const DEFAULT_SETTINGS = {
   },
   translation: {
     google: {
-      enabled: false,
+      enabled: true,
+      mode: "web",
       apiKey: ""
     },
     youdao: {
@@ -26,6 +27,14 @@ const DEFAULT_SETTINGS = {
     },
     source: "auto",
     target: "zh-CN"
+  },
+  behavior: {
+    selectionLookup: true,
+    selectionMaxLength: 500
+  },
+  window: {
+    alwaysOnTop: false,
+    hideOnClose: true
   }
 };
 
@@ -61,6 +70,14 @@ function mergeSettings(value) {
         ...clone(DEFAULT_SETTINGS.translation.youdao),
         ...(source.translation?.youdao || {})
       }
+    },
+    behavior: {
+      ...clone(DEFAULT_SETTINGS.behavior),
+      ...(source.behavior || {})
+    },
+    window: {
+      ...clone(DEFAULT_SETTINGS.window),
+      ...(source.window || {})
     }
   };
 }

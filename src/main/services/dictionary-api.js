@@ -1,10 +1,33 @@
 const DEFAULT_TIMEOUT = 12000;
 
+async function runtimeFetch(url, options) {
+  const hostname = (() => {
+    try { return new URL(String(url)).hostname.toLowerCase(); } catch (_) { return ""; }
+  })();
+  const useSystemNetworkFirst = process.versions?.electron && (hostname === "translate.googleapis.com" || hostname === "translation.googleapis.com");
+  if (useSystemNetworkFirst) {
+    try {
+      const { net } = require("electron");
+      if (net?.fetch) return await net.fetch(url, options);
+    } catch (error) {
+      console.warn("Electron net.fetch failed; falling back to Node fetch:", error.message);
+    }
+  }
+  try {
+    return await fetch(url, options);
+  } catch (error) {
+    if (!process.versions?.electron || options?.signal?.aborted || useSystemNetworkFirst) throw error;
+    const { net } = require("electron");
+    if (!net?.fetch) throw error;
+    return net.fetch(url, options);
+  }
+}
+
 async function fetchJson(url, options = {}, timeout = DEFAULT_TIMEOUT) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   try {
-    const response = await fetch(url, { ...options, signal: controller.signal });
+    const response = await runtimeFetch(url, { ...options, signal: controller.signal });
     const body = await response.text();
     let data = null;
     try {
@@ -170,6 +193,7 @@ async function queryMerriamWebster(query, config = {}) {
 
 module.exports = {
   fetchJson,
+  runtimeFetch,
   normalizeMerriamItem,
   normalizeOxford,
   queryMerriamWebster,

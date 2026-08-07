@@ -5,7 +5,11 @@ const path = require("node:path");
 const test = require("node:test");
 const { DictionaryManager, normalizeEntry, parseCsv } = require("../src/main/dictionary-manager");
 const { normalizeMerriamItem } = require("../src/main/services/dictionary-api");
+const { hasDrugIdentity } = require("../src/main/services/drugshop");
+const { parseSelectionLine } = require("../src/main/selection-monitor");
+const { lookupWord } = require("../src/main/services/word-lookup");
 const { buildYoudaoPayload } = require("../src/main/services/translation");
+const { mergeSettings } = require("../src/main/store");
 
 test("normalizes a local bilingual dictionary entry", () => {
   const entry = normalizeEntry({
@@ -67,4 +71,68 @@ test("normalizes a Merriam-Webster response shape", () => {
   assert.equal(entry.word, "example");
   assert.equal(entry.entries[0].partOfSpeech, "noun");
   assert.equal(entry.entries[0].definitions[0].definition, "something that serves as a model");
+});
+
+test("uses an exact local dictionary hit without calling a cloud provider", async () => {
+  let cloudCalls = 0;
+  const localEntry = { word: "serendipity", senses: [{ definition: "a fortunate discovery" }] };
+  const result = await lookupWord("serendipity", {
+    dictionaryManager: {
+      searchLocal: async () => ({ exactResults: [localEntry], suggestions: [], warnings: [], sources: [] })
+    },
+    settings: mergeSettings({}),
+    translate: async () => {
+      cloudCalls += 1;
+      return { results: [], warnings: [] };
+    }
+  });
+  assert.equal(result.strategy, "local");
+  assert.equal(result.localResults[0].word, "serendipity");
+  assert.equal(cloudCalls, 0);
+});
+
+test("falls back to enabled cloud lookup when local dictionaries miss", async () => {
+  let cloudCalls = 0;
+  const result = await lookupWord("serendipity", {
+    dictionaryManager: {
+      searchLocal: async () => ({ exactResults: [], suggestions: [], warnings: [], sources: [] })
+    },
+    settings: mergeSettings({}),
+    translate: async query => {
+      cloudCalls += 1;
+      return {
+        source: "auto",
+        target: "zh-CN",
+        results: [{ provider: "google", translations: [`${query}-中文`] }],
+        warnings: []
+      };
+    }
+  });
+  assert.equal(result.strategy, "cloud");
+  assert.equal(result.cloudResults[0].translations[0], "serendipity-中文");
+  assert.deepEqual(result.providers, ["google"]);
+  assert.equal(cloudCalls, 1);
+});
+
+test("decodes UTF-8 selection messages from the Windows helper", () => {
+  const encoded = Buffer.from("aspirin 阿司匹林", "utf8").toString("base64");
+  assert.deepEqual(parseSelectionLine(`TEXT\t${encoded}`), {
+    type: "text",
+    text: "aspirin 阿司匹林"
+  });
+});
+
+test("defaults to automatic selection and Google web fallback without storing a key", () => {
+  const settings = mergeSettings({});
+  assert.equal(settings.behavior.selectionLookup, true);
+  assert.equal(settings.translation.google.enabled, true);
+  assert.equal(settings.translation.google.mode, "web");
+  assert.equal(settings.translation.google.apiKey, "");
+});
+
+test("does not classify a phrase as a drug from trial or PubChem text alone", () => {
+  assert.equal(hasDrugIdentity({ rxcui: null }, null, []), false);
+  assert.equal(hasDrugIdentity({ rxcui: "1191" }, null, []), true);
+  assert.equal(hasDrugIdentity({ rxcui: null }, { id: "CHEMBL25" }, []), true);
+  assert.equal(hasDrugIdentity({ rxcui: null }, null, [{ applicationNumber: "NDA000001" }]), true);
 });

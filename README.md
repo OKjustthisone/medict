@@ -1,31 +1,27 @@
 # Medict
 
-Medict 是一个面向 Windows 的桌面词典工作台，目标是把三类工作放到一个本地窗口里：
+Medict 是一个面向 Windows 的小型桌面查词窗口。界面参考 [pot-desktop](https://github.com/pot-app/pot-desktop) 的轻量弹窗思路，但查询模型只有一个输入框和两个动作：
 
-- 本地词典检索：先支持项目自带的示例词典，以及 JSON、ECDICT 风格 CSV、制表符 TXT 导入。
-- 英英 / 英汉查询：通过授权的 Oxford Dictionaries API、Merriam-Webster Collegiate API 获取在线内容；Longman 等服务先提供官方网页跳转。
-- 在线翻译与药物检索：支持 Google Cloud Translation、有道智云，以及从现有 `drugshop` 浏览器扩展移植的公开药物数据库查询层。
+- **查词**：先查本地词典的精确词条；没有命中时，再调用已启用的 Google / 有道服务。
+- **药物查询**：调用从 `drugshop` 集成的完整公开数据查询链路。
+- **自动划词**：在其他 Windows 应用中用鼠标选中文本后，同时执行上面两条查询，并弹出同一个结果窗口；不是药物时明确显示“未找到该药物”。
 
-## 当前技术方案
+## 当前可运行范围
 
-第一版使用 Electron + 原生 HTML/CSS/JavaScript。服务适配器位于主进程，渲染层没有网络或文件系统权限：
+本轮按需求暂不安装本地词典。应用默认启用 Google 免密钥兼容模式，因此安装依赖后即可测试云端查词；设置里也可以切换到 Google Cloud Translation API，或填写有道智云 App ID / App Secret。
 
-```text
-renderer/index.html + renderer.js
-            │  preload bridge
-            ▼
-main/main.js ── settings / file import / IPC
-      ├── dictionary-manager.js ── local JSON/CSV/TXT
-      ├── services/dictionary-api.js ── Oxford / Merriam-Webster
-      ├── services/translation.js ── Google / Youdao
-      └── services/drugshop.js ── RxNorm / ChEMBL / PubChem / FDA / trials
-```
+药物查询并行聚合以下公开服务：
 
-这个分层借鉴了 pot-desktop 的“多服务并行 + 可扩展服务接口”思路，但没有复制 pot 的源代码。后续如果需要托盘常驻、划词快捷键、OCR 或更轻量的发布包，可以在接口不变的情况下增加 Windows 原生能力或迁移到 Tauri。
+- RxNorm / RxNav / RxClass
+- ChEMBL
+- UniProt
+- PubChem
+- Drugs@FDA
+- ClinicalTrials.gov
+
+结果包含名称和别名、结构、处方信息、分类、靶点与机制、适应症、FDA 批准、临床试验、标准化药理活性和原始来源链接。它只用于信息检索，不构成诊断或治疗建议。
 
 ## 运行
-
-在 Windows PowerShell 中执行：
 
 ```powershell
 npm.cmd install
@@ -39,46 +35,56 @@ npm.cmd start
 npm.cmd run dist
 ```
 
-当前没有把 API Key 写进项目。第一次启动后打开“服务与设置”，填写自己的凭据并启用对应服务。配置文件和导入词典会保存到 Electron 的用户数据目录，不会写入 Git 工作区。
+`npm start` 和打包前会自动使用 Windows 自带的 .NET Framework C# 编译器生成 `SelectionHelper.exe`。该助手负责跨应用鼠标划词监听，不需要额外安装 .NET SDK。
 
-## 本地词典格式
+快捷键 `Ctrl + Alt + D` 可以重新呼出已隐藏的 Medict 窗口。关闭按钮默认隐藏到系统托盘；可以在设置中彻底退出。
 
-最简单的 JSON 格式如下：
+## 查词顺序
 
-```json
-{
-  "name": "My licensed dictionary",
-  "license": "按原词典授权协议填写",
-  "sourceUrl": "https://example.com",
-  "entries": [
-    {
-      "word": "word",
-      "phonetic": "/wɜːd/",
-      "senses": [
-        {
-          "partOfSpeech": "noun",
-          "definition": "A unit of language.",
-          "translations": ["单词；词语"],
-          "examples": ["This is an example sentence."]
-        }
-      ]
-    }
-  ]
-}
+```text
+输入或划词
+   │
+   ├─ 本地词典精确命中 ─→ 直接显示本地释义，不访问云端
+   │
+   └─ 本地未命中 ─────→ Google / 有道云端回退
+
+划词事件同时启动：
+   ├─ 上面的普通查词流程
+   └─ DrugShop 药物数据流程
 ```
 
-也可以导入带 `word`、`phonetic`、`definition`、`translation`、`pos` 列的 CSV。应用会复制导入文件到用户数据目录，并在查询时对所有本地词典源并行检索。
+## 自动划词说明
 
-## 数据源与授权边界
+Windows 助手优先通过 UI Automation 读取选中文字；不支持的应用会临时发送 `Ctrl+C`，读取后尽量恢复原剪贴板内容。密码输入框会被跳过，文本只在本机进入查词流程，不会写入日志。
 
-Oxford Advanced Learner's、Longman、Merriam-Webster 的完整词典内容不能因为“用于学习”就自动成为开源内容。Medict 只提供适配器、授权凭据输入和用户自行导入的本地文件；是否可以保存、缓存或再分发内容，要以各数据源的许可证、API 计划和服务条款为准。
+当前自动触发针对鼠标选词。某些以管理员身份运行、受保护或不暴露可访问性信息的应用，可能需要以相同权限运行 Medict 才能读取选区。
 
-药物查询仅用于信息检索和研究整理。当前结果会显示来源链接和部分数据源警告，不把公开数据库结果包装成医学诊断、处方或治疗建议。
+## 本地词典规划与授权边界
 
-## 下一阶段
+GoldenDict 不是单一词典文件格式，它常用 StarDict、DSL、Dictd、MDict 等格式。下一阶段优先实现：
 
-1. 增加 StarDict `.ifo/.idx/.dict` 和 DSL 的只读解析器。
-2. 把用户词典索引落到 SQLite，提升大词库的模糊搜索速度。
-3. 增加托盘、全局快捷键、剪贴板查询和历史/生词本。
-4. 将 DrugShop 的 AI 靶点摘要、文献检索和 Excel 导出作为独立的可选模块接入。
-5. 为 API 密钥增加 Windows Credential Manager / Electron `safeStorage` 存储，并完善安装包签名。
+1. StarDict `.ifo/.idx/.dict`（以及 `.dict.dz`）只读解析；
+2. DSL 只读解析；
+3. MDict `.mdx/.mdd` 适配；
+4. SQLite 索引，支持大型词库快速查询。
+
+Oxford Advanced Learner's、Longman 和 Merriam-Webster 的完整词典内容并不因为可下载就自动成为开源内容。Medict 只提供格式适配和查询接口，不随程序分发这些词典；用户需要确认自己导入内容的许可证和使用权限。
+
+## Google 模式说明
+
+默认的“免密钥兼容模式”用于快速试用，调用 Google 翻译的兼容接口，接口可能随服务调整而变化。需要稳定生产使用时，建议在设置中切换到正式 Google Cloud Translation API。API Key 和有道密钥保存在 Electron 用户数据目录，不会提交到 Git；后续版本应再接入 Windows Credential Manager / Electron `safeStorage`。
+
+## 项目结构
+
+```text
+src/renderer/                 紧凑单窗口 UI
+src/main/main.js              窗口、托盘、并行查询和 IPC
+src/main/dictionary-manager.js 本地词典索引边界
+src/main/services/word-lookup.js 本地优先 / 云端回退编排
+src/main/services/translation.js Google / 有道适配
+src/main/services/drugshop.js DrugShop 公开数据库聚合
+src/main/selection-monitor.js Windows 划词助手进程管理
+src/native/SelectionHelper.cs Windows 全局鼠标与选区读取
+```
+
+Medict 没有复制 pot-desktop 的源代码；它只参考了紧凑弹窗、多服务查询和划词工作流。pot-desktop 本身采用 GPL-3.0 许可证，继续借用其代码前应单独评估许可证兼容性。

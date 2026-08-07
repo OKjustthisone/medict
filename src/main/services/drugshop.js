@@ -31,6 +31,10 @@ function uniqueNames(values) {
   });
 }
 
+function hasDrugIdentity(rx, chembl, fda) {
+  return Boolean(rx?.rxcui || chembl || (Array.isArray(fda) && fda.length));
+}
+
 async function safeJson(url, warnings, label, timeout = 12000) {
   try {
     return await fetchJson(url, {}, timeout);
@@ -268,7 +272,10 @@ async function searchDrug(query) {
   const aliases = uniqueNames([trimmed, canonicalName, ...rx.aliases, ...(chembl?.aliases || [])]);
   const brandNames = unique(fda.flatMap(record => record.brandNames));
   const genericNames = unique([canonicalName, ...fda.flatMap(record => record.genericNames)]);
-  const success = Boolean(rx.rxcui || chembl || pubchem || fda.length || trials.length);
+  // ClinicalTrials.gov and PubChem can contain ordinary phrases or non-drug
+  // chemicals. They enrich an identified drug, but must not establish drug
+  // identity on their own or selection lookup will produce false positives.
+  const success = hasDrugIdentity(rx, chembl, fda);
   return {
     type: "drug",
     success,
@@ -283,7 +290,7 @@ async function searchDrug(query) {
     mechanisms: chembl?.mechanisms || [],
     indications: chembl?.indications || [],
     approvals: fda,
-    trials,
+    trials: success ? trials : [],
     preclinical: chembl?.activities || [],
     development: { maxPhase: chembl?.maxPhase, firstApprovalYear: chembl?.firstApproval },
     sources: {
@@ -304,6 +311,7 @@ module.exports = {
   getPubChem,
   getRxNav,
   getTrials,
+  hasDrugIdentity,
   resolveRxNorm,
   searchDrug,
   unique,

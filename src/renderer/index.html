@@ -2,172 +2,154 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: https:; media-src https:; style-src 'self'; script-src 'self'; connect-src 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Medict</title>
-  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div class="app-shell">
-    <aside class="sidebar">
-      <div class="brand">
-        <div class="brand-mark">M</div>
-        <div>
-          <div class="brand-name">Medict</div>
-          <div class="brand-subtitle">Dictionary workspace</div>
-        </div>
-      </div>
-
-      <nav class="mode-nav" aria-label="功能模式">
-        <button class="mode-button active" data-mode="dictionary" type="button">
-          <span class="mode-icon">Aa</span><span>词典</span>
-        </button>
-        <button class="mode-button" data-mode="translation" type="button">
-          <span class="mode-icon">⇄</span><span>翻译</span>
-        </button>
-        <button class="mode-button" data-mode="drug" type="button">
-          <span class="mode-icon">Rx</span><span>药物查询</span>
-        </button>
-      </nav>
-
-      <div class="sidebar-divider"></div>
-      <div class="sidebar-section-title">最近查询</div>
-      <div id="history-list" class="history-list"></div>
-
-      <div class="sidebar-spacer"></div>
-      <div class="local-source-card">
-        <div class="source-card-title">本地词典</div>
-        <div id="local-source-count" class="source-card-value">加载中…</div>
-        <button id="import-dictionary-button" class="text-button" type="button">导入词典文件</button>
-      </div>
-      <button id="settings-button" class="settings-button" type="button">
-        <span class="mode-icon">⚙</span><span>服务与设置</span>
+  <main class="app-shell">
+    <header class="titlebar">
+      <button id="pin-button" class="title-button pin-button" type="button" title="置顶窗口" aria-label="置顶窗口">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3h8l-1 6 3 3v2h-5v7l-1 1-1-1v-7H6v-2l3-3-1-6Z"/></svg>
       </button>
-    </aside>
+      <div class="title-copy">
+        <span class="app-mark">M</span>
+        <span>Medict</span>
+      </div>
+      <div class="title-actions">
+        <button id="settings-button" class="title-button" type="button" title="设置" aria-label="设置">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.5A3.5 3.5 0 1 0 12 15.5 3.5 3.5 0 0 0 12 8.5Zm8.4 4.6-1.8 1 .1 2.1-2.1 2.1-2.1-.1-1 1.8h-3.2l-1-1.8-2.1.1-2.1-2.1.1-2.1-1.8-1V9.9l1.8-1-.1-2.1 2.1-2.1 2.1.1 1-1.8h3.2l1 1.8 2.1-.1 2.1 2.1-.1 2.1 1.8 1v3.2Z"/></svg>
+        </button>
+        <button id="minimize-button" class="title-button" type="button" title="最小化" aria-label="最小化">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14v2H5z"/></svg>
+        </button>
+        <button id="close-button" class="title-button close-button" type="button" title="隐藏到托盘" aria-label="关闭">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6.7 5.3 5.3 5.3 5.3-5.3 1.4 1.4-5.3 5.3 5.3 5.3-1.4 1.4-5.3-5.3-5.3 5.3-1.4-1.4 5.3-5.3-5.3-5.3z"/></svg>
+        </button>
+      </div>
+    </header>
 
-    <main class="main-content">
-      <header class="topbar">
-        <div>
-          <div id="mode-kicker" class="eyebrow">LOCAL DICTIONARY</div>
-          <h1 id="mode-title">词典查询</h1>
-        </div>
-        <div class="topbar-actions">
-          <span id="connection-badge" class="connection-badge">离线词典可用</span>
-          <button id="clear-button" class="icon-button" type="button" title="清空查询">×</button>
-        </div>
-      </header>
+    <section class="query-card" aria-label="查询输入">
+      <textarea id="query-input" rows="3" maxlength="4000" spellcheck="false" placeholder="输入单词、文本或药物名…" autofocus></textarea>
+      <button id="clear-button" class="clear-button" type="button" title="清空" aria-label="清空输入">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10v10H7zM9 9v6h6V9z"/></svg>
+      </button>
+    </section>
 
-      <section class="search-panel">
-        <form id="search-form" class="search-form">
-          <div class="search-input-wrap">
-            <span class="search-icon">⌕</span>
-            <input id="query-input" type="search" autocomplete="off" spellcheck="false" placeholder="输入英文单词或短语，例如 serendipity">
-            <span class="shortcut-hint">Ctrl K</span>
-          </div>
-          <button id="search-button" class="primary-button" type="submit">查询</button>
-        </form>
-        <div id="mode-hint" class="mode-hint">优先检索本地词典；配置授权 API 后可并行查询在线词典。</div>
-        <div class="quick-searches">
-          <span>试试：</span>
-          <button type="button" data-quick-query="serendipity">serendipity</button>
-          <button type="button" data-quick-query="pharmacology">pharmacology</button>
-          <button type="button" data-quick-query="drug">drug</button>
-        </div>
-      </section>
+    <section class="action-row" aria-label="查询操作">
+      <button id="word-button" class="action-button word-button" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h12a2 2 0 0 1 2 2v13H7a2 2 0 0 1-2-2V4Zm3 3v2h8V7H8Zm0 4v2h7v-2H8Zm0 4v2h5v-2H8Z"/></svg>
+        <span>查词</span>
+      </button>
+      <button id="drug-button" class="action-button drug-button" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.2 3.8a4.8 4.8 0 0 1 6.8 0l5.2 5.2a4.8 4.8 0 0 1-6.8 6.8L8.2 10.6a4.8 4.8 0 0 1 0-6.8Zm1.4 1.4a2.8 2.8 0 0 0 0 4l1.9 1.9 4-4-1.9-1.9a2.8 2.8 0 0 0-4 0ZM6 13a5 5 0 1 1 0 10 5 5 0 0 1 0-10Z"/></svg>
+        <span>药物查询</span>
+      </button>
+    </section>
 
-      <div id="status-line" class="status-line" aria-live="polite"></div>
-      <section id="results" class="results" aria-live="polite">
-        <div class="welcome-card">
-          <div class="welcome-orbit">M</div>
-          <div>
-            <h2>一个面向研究工作的本地词典</h2>
-            <p>支持本地词典、在线翻译和药物信息查询。先从左侧选择功能，或直接输入查询。</p>
-            <div class="welcome-pills">
-              <span>离线优先</span><span>多数据源</span><span>可导入</span>
-            </div>
-          </div>
-        </div>
-      </section>
-    </main>
-  </div>
+    <div class="status-row">
+      <button id="selection-status" class="selection-status" type="button" title="打开划词设置">
+        <span class="status-dot"></span>
+        <span class="selection-label">正在启动自动划词</span>
+      </button>
+      <span id="request-status" class="request-status" role="status"></span>
+    </div>
+
+    <section id="results" class="results" aria-live="polite"></section>
+  </main>
 
   <dialog id="settings-dialog" class="settings-dialog">
-    <form id="settings-form" method="dialog">
-      <div class="dialog-header">
+    <form id="settings-form">
+      <header class="dialog-header">
         <div>
-          <div class="eyebrow">SERVICE CONFIGURATION</div>
-          <h2>服务与设置</h2>
+          <div class="eyebrow">MEDICT</div>
+          <h2>设置</h2>
         </div>
-        <button id="close-settings-button" class="icon-button" type="button">×</button>
-      </div>
+        <button id="close-settings-button" class="icon-button" type="button" aria-label="关闭设置">×</button>
+      </header>
 
       <div class="settings-scroll">
         <section class="settings-section">
-          <div class="settings-section-heading">
-            <h3>在线词典</h3>
-            <p>需要你自己的授权凭据；Medict 不内置或分发受版权保护的词典内容。</p>
-          </div>
-          <div class="provider-row">
-            <label class="check-label"><input id="oxford-enabled" type="checkbox"><span>启用 Oxford Dictionaries API</span></label>
-            <div class="field-grid three-columns">
-              <label>App ID<input id="oxford-app-id" type="text" autocomplete="off"></label>
-              <label>App Key<input id="oxford-app-key" type="password" autocomplete="off"></label>
-              <label>语言区域<input id="oxford-locale" type="text" value="en-gb" placeholder="en-gb"></label>
+          <div class="section-heading">
+            <div>
+              <h3>自动划词</h3>
+              <p>鼠标选中文本后，同时执行普通查词和药物查询。</p>
             </div>
+            <label class="switch"><input id="selection-enabled" type="checkbox"><span></span></label>
           </div>
-          <div class="provider-row">
-            <label class="check-label"><input id="merriam-enabled" type="checkbox"><span>启用 Merriam-Webster Collegiate API</span></label>
-            <label>API Key<input id="merriam-api-key" type="password" autocomplete="off"></label>
-          </div>
-          <div class="provider-note">Longman 等没有公开可自由分发的词典数据，当前可通过“打开在线词典”链接使用；后续可按正式授权增加适配器。</div>
+          <p class="subtle-note">仅在 Medict 运行时监听；密码输入框会跳过。快捷键 <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>D</kbd> 可随时呼出窗口。</p>
         </section>
 
         <section class="settings-section">
-          <div class="settings-section-heading">
-            <h3>在线翻译</h3>
-            <p>Google Cloud Translation 和有道智云会并行返回结果，凭据只保存在本机用户数据目录。</p>
-          </div>
-          <div class="field-grid two-columns compact-grid">
-            <label>源语言<input id="translation-source" type="text" value="auto" placeholder="auto"></label>
-            <label>目标语言<input id="translation-target" type="text" value="zh-CN" placeholder="zh-CN"></label>
-          </div>
-          <div class="provider-row">
-            <label class="check-label"><input id="google-enabled" type="checkbox"><span>启用 Google Cloud Translation</span></label>
-            <label>API Key<input id="google-api-key" type="password" autocomplete="off"></label>
-          </div>
-          <div class="provider-row">
-            <label class="check-label"><input id="youdao-enabled" type="checkbox"><span>启用有道智云翻译</span></label>
-            <div class="field-grid two-columns">
-              <label>应用 ID<input id="youdao-app-key" type="text" autocomplete="off"></label>
-              <label>应用密钥<input id="youdao-app-secret" type="password" autocomplete="off"></label>
+          <div class="section-heading">
+            <div>
+              <h3>云端查词</h3>
+              <p>仅在本地词典没有精确词条时调用。</p>
             </div>
           </div>
+
+          <div class="provider-card">
+            <div class="provider-title-row">
+              <label class="provider-check"><input id="google-enabled" type="checkbox"><span class="provider-logo google-logo">G</span><strong>Google</strong></label>
+              <select id="google-mode" aria-label="Google 接入方式">
+                <option value="web">免密钥兼容模式</option>
+                <option value="cloud">Google Cloud API</option>
+              </select>
+            </div>
+            <label id="google-key-field" class="field">Google Cloud API Key（兼容模式无需填写）
+              <input id="google-api-key" type="password" autocomplete="off" placeholder="可选">
+            </label>
+            <p class="provider-help">兼容模式便于直接试用，但接口可能随 Google 调整；正式发布可切换到 Cloud API。</p>
+          </div>
+
+          <div class="provider-card">
+            <div class="provider-title-row">
+              <label class="provider-check"><input id="youdao-enabled" type="checkbox"><span class="provider-logo youdao-logo">有</span><strong>有道智云</strong></label>
+            </div>
+            <div class="two-fields">
+              <label class="field">应用 ID<input id="youdao-app-key" type="text" autocomplete="off"></label>
+              <label class="field">应用密钥<input id="youdao-app-secret" type="password" autocomplete="off"></label>
+            </div>
+          </div>
+
+          <label class="field compact-field">默认目标语言
+            <select id="translation-target">
+              <option value="zh-CN">简体中文</option>
+              <option value="en">English</option>
+              <option value="ja">日本語</option>
+            </select>
+          </label>
         </section>
 
         <section class="settings-section">
-          <div class="settings-section-heading">
-            <h3>本地词典</h3>
-            <p>支持 Medict JSON、常见 ECDICT CSV，以及每行“单词[TAB]释义[TAB]翻译”的 TXT。</p>
+          <div class="section-heading">
+            <div>
+              <h3>本地词典</h3>
+              <p>本轮不安装词典，先验证云端查词与药物数据。</p>
+            </div>
+            <span id="dictionary-count" class="count-pill">0 个</span>
           </div>
           <div id="dictionary-sources" class="dictionary-sources"></div>
-          <button id="settings-import-button" class="secondary-button" type="button">导入本地词典</button>
+          <p class="subtle-note">后续优先支持 GoldenDict 常用的 StarDict（.ifo/.idx/.dict）、DSL，以及 MDict。词典内容需由用户按授权自行导入。</p>
         </section>
 
-        <section class="settings-section safety-note">
-          <strong>医学信息提示</strong>
-          <p>药物数据来自公开数据库，仅用于检索和研究整理，不构成诊断、处方或治疗建议。在线 API 可能有速率限制和服务条款。</p>
+        <section class="settings-section compact-settings">
+          <label class="check-row"><input id="hide-on-close" type="checkbox"><span>点击关闭按钮时隐藏到托盘</span></label>
         </section>
       </div>
 
-      <div class="dialog-footer">
-        <span id="settings-status" class="settings-status"></span>
-        <div>
+      <footer class="dialog-footer">
+        <button id="quit-button" class="text-button danger-text" type="button">退出 Medict</button>
+        <div class="dialog-actions">
+          <span id="settings-status" class="settings-save-status"></span>
           <button id="cancel-settings-button" class="secondary-button" type="button">取消</button>
-          <button class="primary-button" type="submit">保存设置</button>
+          <button class="primary-button" type="submit">保存</button>
         </div>
-      </div>
+      </footer>
     </form>
   </dialog>
 
-  <script src="./renderer.js"></script>
+  <script src="renderer.js"></script>
 </body>
 </html>

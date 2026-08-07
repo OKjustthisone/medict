@@ -3,367 +3,455 @@
 
   const api = window.medict;
   const state = {
-    mode: "dictionary",
     settings: null,
     sources: [],
-    history: loadHistory(),
-    requestId: 0
-  };
-
-  const MODES = {
-    dictionary: {
-      title: "词典查询",
-      kicker: "LOCAL DICTIONARY",
-      placeholder: "输入英文单词或短语，例如 serendipity",
-      hint: "优先检索本地词典；配置授权 API 后可并行查询在线词典。"
-    },
-    translation: {
-      title: "在线翻译",
-      kicker: "ONLINE TRANSLATION",
-      placeholder: "输入单词、短语或句子，例如 immune checkpoint inhibitor",
-      hint: "Google 和有道可并行返回结果；请先在服务与设置中配置 API 凭据。"
-    },
-    drug: {
-      title: "药物查询",
-      kicker: "DRUG INFORMATION",
-      placeholder: "输入药物通用名、商品名、ChEMBL ID 或研究编号",
-      hint: "查询 RxNorm、ChEMBL、PubChem、FDA 和 ClinicalTrials.gov 等公开来源。"
-    }
+    requestId: 0,
+    activeSelectionRequestId: null,
+    selectionStatus: { available: false, active: false, message: "正在启动自动划词" },
+    pinned: false
   };
 
   const $ = selector => document.querySelector(selector);
-  const $$ = selector => [...document.querySelectorAll(selector)];
-  const esc = value => String(value ?? "").replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[character]));
+  const esc = value => String(value ?? "").replace(/[&<>"']/g, character => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  }[character]));
   const clean = value => String(value ?? "").trim();
+  const values = value => (Array.isArray(value) ? value : value == null || value === "" ? [] : [value]).filter(item => item != null && item !== "");
+  const valueOrDash = value => {
+    const items = values(value).map(clean).filter(Boolean);
+    return items.length ? items.join("；") : "—";
+  };
 
-  function loadHistory() {
-    try {
-      const value = JSON.parse(localStorage.getItem("medict.search.history") || "[]");
-      return Array.isArray(value) ? value.filter(Boolean).slice(0, 12) : [];
-    } catch (_) {
-      return [];
+  function setRequestStatus(message = "", kind = "") {
+    const element = $("#request-status");
+    element.textContent = message;
+    element.className = `request-status ${kind}`.trim();
+  }
+
+  function setBusy(busy) {
+    $("#word-button").disabled = busy;
+    $("#drug-button").disabled = busy;
+  }
+
+  function renderIdle() {
+    const localCount = state.sources.reduce((sum, source) => sum + Number(source.entryCount || 0), 0);
+    const localMessage = localCount
+      ? `已加载 ${localCount.toLocaleString()} 条本地词条；精确命中时不会访问云端。`
+      : "当前未安装本地词典，普通查词会直接使用 Google 云端回退。";
+    $("#results").innerHTML = `<div class="empty-state"><div><span class="empty-state-icon">M</span><strong>一个输入框，两种查询</strong><p>${esc(localMessage)} 鼠标划词时，两种查询会同时执行。</p></div></div>`;
+  }
+
+  function loadingBlock(label, query) {
+    return `<section class="result-block"><div class="result-block-heading"><div class="heading-title"><span class="heading-label">${esc(label)}</span><h2>${esc(query)}</h2></div><span class="source-badge">查询中</span></div><div class="loading-state"><div class="loading-line short"></div><div class="loading-line"></div><div class="loading-line medium"></div></div></section>`;
+  }
+
+  function showLoading(mode, query) {
+    const blocks = mode === "selection"
+      ? `${loadingBlock("WORD", query)}${loadingBlock("DRUG", query)}`
+      : loadingBlock(mode === "drug" ? "DRUG" : "WORD", query);
+    $("#results").innerHTML = `<div class="result-stack">${blocks}</div>`;
+    $("#results").scrollTop = 0;
+  }
+
+  function warningDetails(warnings) {
+    const rows = values(warnings).map(clean).filter(Boolean);
+    if (!rows.length) return "";
+    return `<details class="warning-details"><summary>部分数据源未返回 <span class="source-badge">${rows.length}</span></summary><ul>${rows.slice(0, 16).map(item => `<li>${esc(item)}</li>`).join("")}</ul></details>`;
+  }
+
+  function sourceBadge(result) {
+    if (result.strategy === "local") return result.localResults?.[0]?.source?.name || "本地词典";
+    const names = (result.cloudResults || []).map(item => item.name || item.provider).filter(Boolean);
+    return names.join(" + ") || "云端回退";
+  }
+
+  function renderSense(sense) {
+    const translations = values(sense.translations).map(item => `<span class="translation-chip">${esc(item)}</span>`).join("");
+    const examples = values(sense.examples).map(esc).join("<br>");
+    return `<div class="sense">${sense.partOfSpeech ? `<span class="part-of-speech">${esc(sense.partOfSpeech)}</span>` : ""}<div class="definition">${esc(sense.definition || "暂无英文释义")}</div>${translations ? `<div class="translations">${translations}</div>` : ""}${examples ? `<div class="example">${examples}</div>` : ""}</div>`;
+  }
+
+  function renderLocalEntry(entry) {
+    return `<div class="result-body"><div class="word-head"><strong>${esc(entry.word)}</strong>${entry.phonetic ? `<span class="phonetic">${esc(entry.phonetic)}</span>` : ""}</div>${values(entry.senses).map(renderSense).join("")}</div>`;
+  }
+
+  function renderCloudResult(result) {
+    const translations = values(result.translations).map(esc).join("<br>") || "服务没有返回译文";
+    const sourceUrl = result.source?.url;
+    const provider = sourceUrl
+      ? `<a href="#" data-external-url="${esc(sourceUrl)}">${esc(result.name || result.provider || "云端服务")}</a>`
+      : esc(result.name || result.provider || "云端服务");
+    return `<div class="cloud-result"><div class="cloud-provider"><span>${provider}</span><span>${result.detectedSource ? `${esc(result.detectedSource)} → ` : ""}${esc(state.settings?.translation?.target || "zh-CN")}</span></div><div class="cloud-translation">${translations}</div>${result.mode === "web" ? '<div class="cloud-meta">Google 免密钥兼容模式</div>' : ""}</div>`;
+  }
+
+  function renderSuggestions(suggestions) {
+    const words = values(suggestions).map(item => clean(item.word || item)).filter(Boolean);
+    if (!words.length) return "";
+    return `<div class="suggestion-row">${words.slice(0, 8).map(word => `<button class="suggestion-button" type="button" data-query-word="${esc(word)}">${esc(word)}</button>`).join("")}</div>`;
+  }
+
+  function renderWord(result, error = "") {
+    const query = result?.query || clean($("#query-input").value);
+    if (error) {
+      return `<section class="result-block"><div class="result-block-heading"><div class="heading-title"><span class="heading-label">WORD</span><h2>${esc(query || "查词")}</h2></div></div><div class="notice error"><strong>查词失败</strong>${esc(error)}</div></section>`;
     }
-  }
+    if (!result) return loadingBlock("WORD", query);
 
-  function saveHistory(query) {
-    const value = clean(query);
-    if (!value) return;
-    state.history = [value, ...state.history.filter(item => item.toLowerCase() !== value.toLowerCase())].slice(0, 12);
-    localStorage.setItem("medict.search.history", JSON.stringify(state.history));
-    renderHistory();
-  }
-
-  function renderHistory() {
-    const root = $("#history-list");
-    if (!state.history.length) {
-      root.innerHTML = '<div class="history-empty">暂无查询记录</div>';
-      return;
-    }
-    root.innerHTML = state.history.map(query => `<button class="history-item" type="button" data-history-query="${esc(query)}" title="${esc(query)}">${esc(query)}</button>`).join("");
-  }
-
-  function setStatus(message, kind = "") {
-    const element = $("#status-line");
-    element.className = `status-line ${kind}`.trim();
-    element.textContent = message || "";
-  }
-
-  function setMode(mode) {
-    state.mode = mode;
-    const config = MODES[mode];
-    $$(".mode-button").forEach(button => button.classList.toggle("active", button.dataset.mode === mode));
-    $("#mode-kicker").textContent = config.kicker;
-    $("#mode-title").textContent = config.title;
-    $("#query-input").placeholder = config.placeholder;
-    $("#mode-hint").textContent = config.hint;
-    $("#query-input").value = "";
-    $("#results").innerHTML = `<div class="welcome-card"><div class="welcome-orbit">${mode === "drug" ? "Rx" : mode === "translation" ? "⇄" : "M"}</div><div><h2>${mode === "drug" ? "公开药物信息" : mode === "translation" ? "多服务翻译" : "离线优先的词典"}</h2><p>${esc(config.hint)}</p><div class="welcome-pills"><span>${mode === "drug" ? "多数据库" : mode === "translation" ? "并行返回" : "本地可用"}</span><span>可配置</span><span>可追溯</span></div></div></div>`;
-    setStatus("");
-    updateConnectionBadge();
-  }
-
-  function updateConnectionBadge() {
-    const hasDictionaryApi = Boolean(state.settings?.dictionary?.oxford?.enabled || state.settings?.dictionary?.merriamWebster?.enabled);
-    const hasTranslationApi = Boolean(state.settings?.translation?.google?.enabled || state.settings?.translation?.youdao?.enabled);
-    const online = state.mode === "dictionary" ? hasDictionaryApi : state.mode === "translation" ? hasTranslationApi : true;
-    const badge = $("#connection-badge");
-    badge.textContent = online ? "在线服务已配置" : state.mode === "drug" ? "公开数据源" : "离线词典可用";
-    badge.classList.toggle("online", online && state.mode !== "drug");
-  }
-
-  function renderSources() {
-    $("#local-source-count").textContent = `${state.sources.length} 个词典源`;
-    const root = $("#dictionary-sources");
-    if (!state.sources.length) {
-      root.innerHTML = '<div class="dictionary-source-meta">暂无可用词典源</div>';
-      return;
-    }
-    root.innerHTML = state.sources.map(source => `<div class="dictionary-source"><div><div class="dictionary-source-name">${esc(source.name)}</div><div class="dictionary-source-meta">${esc(source.license || "未声明授权")}</div></div><div class="dictionary-source-count">${Number(source.entryCount || 0).toLocaleString()} 条</div></div>`).join("");
-  }
-
-  function showLoading(label) {
-    $("#results").innerHTML = `<div class="loading-card"><span class="spinner"></span><span>${esc(label)}</span></div>`;
-    setStatus("");
-    $("#search-button").disabled = true;
-  }
-
-  function finishLoading() {
-    $("#search-button").disabled = false;
-  }
-
-  async function search() {
-    const query = clean($("#query-input").value);
-    if (!query) {
-      $("#query-input").focus();
-      setStatus("请输入查询内容", "error");
-      return;
-    }
-    const requestId = ++state.requestId;
-    saveHistory(query);
-    showLoading(state.mode === "drug" ? "正在并行查询药物数据库…" : state.mode === "translation" ? "正在请求翻译服务…" : "正在检索本地和在线词典…");
-    try {
-      const data = state.mode === "drug"
-        ? await api.searchDrug(query)
-        : state.mode === "translation"
-          ? await api.translate(query)
-          : await api.searchDictionary(query);
-      if (requestId !== state.requestId) return;
-      finishLoading();
-      if (state.mode === "drug") renderDrug(data);
-      else if (state.mode === "translation") renderTranslation(data);
-      else renderDictionary(data);
-    } catch (error) {
-      if (requestId !== state.requestId) return;
-      finishLoading();
-      $("#results").innerHTML = `<div class="notice-card warning"><strong>查询失败</strong><p>${esc(error.message || error)}</p></div>`;
-      setStatus("查询失败", "error");
-    }
-  }
-
-  function warningHtml(warnings) {
-    if (!warnings?.length) return "";
-    return `<div class="notice-card warning"><strong>部分数据源未返回</strong><ul class="warning-list">${warnings.slice(0, 12).map(item => `<li>${esc(item)}</li>`).join("")}</ul></div>`;
-  }
-
-  function sourceFooter(source) {
-    if (!source) return "";
-    const url = source.url || "";
-    return `<div class="result-card-footer"><span>来源：${esc(source.name || source.id || "未知")}</span><span>授权：${esc(source.license || "请查看原始条款")}</span>${url ? `<a href="${esc(url)}" data-external-url="${esc(url)}">打开来源 ↗</a>` : ""}</div>`;
-  }
-
-  function normalizedGroups(entry) {
-    if (Array.isArray(entry.entries)) return entry.entries;
-    const groups = {};
-    for (const sense of entry.senses || []) {
-      const key = sense.partOfSpeech || "释义";
-      groups[key] ||= { partOfSpeech: key, definitions: [] };
-      groups[key].definitions.push({
-        definition: sense.definition,
-        translations: sense.translations || [],
-        examples: sense.examples || [],
-        synonyms: sense.synonyms || []
-      });
-    }
-    return Object.values(groups);
-  }
-
-  function renderDefinitions(entry) {
-    const groups = normalizedGroups(entry);
-    return groups.map(group => `<div class="entry-group">${group.partOfSpeech ? `<div class="pos-label">${esc(group.partOfSpeech)}</div>` : ""}${(group.definitions || []).map((definition, index) => `<div class="definition-row"><span class="definition-number">${index + 1}.</span><div><div class="definition">${esc(definition.definition || "暂无释义")}</div>${definition.translations?.length ? `<div class="translations">${definition.translations.map(value => `<span class="translation-chip">${esc(value)}</span>`).join("")}</div>` : ""}${definition.examples?.length ? `<div class="examples">${definition.examples.map(value => esc(value)).join("<br>")}</div>` : ""}${definition.synonyms?.length ? `<div class="synonyms">同义词：${definition.synonyms.map(esc).join(", ")}</div>` : ""}</div></div>`).join("")}</div>`).join("");
-  }
-
-  function renderDictionary(data) {
-    const results = data?.results || [];
-    const content = [];
-    if (data?.warnings?.length) content.push(warningHtml(data.warnings));
-    if (!results.length) {
-      const q = encodeURIComponent(data?.query || $("#query-input").value.trim());
-      content.push(`<div class="notice-card"><strong>没有找到本地或已配置的在线词典结果</strong><p>可以导入 JSON/CSV/TXT 词典，或在设置中配置 Oxford / Merriam-Webster。也可以打开在线词典页面继续查询。</p><div class="suggestions"><button type="button" data-external-url="https://www.ldoceonline.com/dictionary/${q}">Longman</button><button type="button" data-external-url="https://www.oxfordlearnersdictionaries.com/definition/english/${q}">Oxford Learner's</button><button type="button" data-external-url="https://www.merriam-webster.com/dictionary/${q}">Merriam-Webster</button></div></div>`);
+    const heading = `<div class="result-block-heading"><div class="heading-title"><span class="heading-label">WORD</span><h2>${esc(query)}</h2></div><span class="source-badge">${esc(sourceBadge(result))}</span></div>`;
+    let content = "";
+    if (result.strategy === "local" && result.localResults?.length) {
+      content = result.localResults.map(renderLocalEntry).join("");
+    } else if (result.cloudResults?.length) {
+      content = `<div class="result-body">${result.cloudResults.map(renderCloudResult).join("")}${renderSuggestions(result.suggestions)}</div>`;
     } else {
-      content.push(`<div class="result-toolbar"><h2>查询结果</h2><span class="result-count">${results.length} 个结果</span></div>`);
-      for (const entry of results) {
-        if (entry.type === "suggestions") {
-          content.push(`<div class="notice-card"><strong>${esc(entry.word)} 的近似结果</strong><div class="suggestions">${(entry.suggestions || []).map(item => `<button type="button" data-query-value="${esc(item)}">${esc(item)}</button>`).join("")}</div>${sourceFooter(entry.source)}</div>`);
-          continue;
-        }
-        const isOnline = entry.type === "online";
-        content.push(`<article class="result-card"><div class="result-card-header"><div><div class="word-line"><h3>${esc(entry.word)}</h3>${entry.phonetic ? `<span class="phonetic">${esc(entry.phonetic)}</span>` : ""}${entry.audioUrl ? `<button class="audio-button" type="button" data-audio-url="${esc(entry.audioUrl)}">播放发音</button>` : ""}</div></div><span class="provider-label ${isOnline ? "online" : ""}">${esc(isOnline ? entry.source?.name || "在线词典" : entry.source?.name || "本地词典")}</span></div>${renderDefinitions(entry)}${sourceFooter(entry.source)}</article>`);
-      }
+      const configured = values(result.providers).length > 0;
+      content = `<div class="notice ${configured ? "warning" : ""}"><strong>${configured ? "云端没有返回结果" : "未配置可用的云端服务"}</strong>${configured ? "请检查网络或展开下方错误信息。" : "在设置中启用 Google 兼容模式，或填写 Google Cloud / 有道凭据。"}${renderSuggestions(result.suggestions)}</div>`;
     }
-    $("#results").innerHTML = content.join("");
-    setStatus(results.length ? `已完成：${results.length} 个词典结果` : "未找到匹配结果");
+    return `<section class="result-block">${heading}${content}${warningDetails(result.warnings)}</section>`;
   }
 
-  function renderTranslation(data) {
-    const content = [warningHtml(data?.warnings)];
-    if (!data?.results?.length) {
-      content.push('<div class="notice-card"><strong>尚未配置翻译服务</strong><p>请打开“服务与设置”，填写 Google Cloud Translation API Key 或有道智云 App Key / App Secret，并启用对应服务。</p></div>');
-    } else {
-      content.push(`<div class="result-toolbar"><h2>${esc(data.query)}</h2><span class="result-count">${esc(data.source || "auto")} → ${esc(data.target || "zh-CN")}</span></div>`);
-      content.push(...data.results.map(result => `<article class="translation-card"><div class="translation-card-header"><span class="translation-provider">${esc(result.name || result.provider)}</span><span class="provider-label online">在线服务</span></div><div class="translation-value">${(result.translations || []).length ? result.translations.map(esc).join("<br>") : "服务没有返回译文"}</div>${result.detectedSource ? `<div class="translation-meta">检测到源语言：${esc(result.detectedSource)}</div>` : ""}${sourceFooter(result.source)}</article>`));
-    }
-    $("#results").innerHTML = content.filter(Boolean).join("");
-    setStatus(data?.results?.length ? `已完成：${data.results.length} 个翻译服务返回结果` : "没有可显示的翻译结果");
-  }
-
-  function valueOrDash(value) {
-    if (Array.isArray(value)) return value.filter(Boolean).join("；") || "—";
-    return clean(value) || "—";
+  function phaseLabel(value) {
+    const phase = Number(value);
+    if (!Number.isFinite(phase)) return valueOrDash(value);
+    if (phase >= 4) return "已上市 / Phase 4";
+    if (phase > 0) return `Phase ${phase}`;
+    return "临床前";
   }
 
   function identifier(label, value, url) {
-    if (!value) return "";
-    return url ? `<a class="identifier" href="${esc(url)}" data-external-url="${esc(url)}">${esc(label)}：${esc(value)}</a>` : `<span class="identifier">${esc(label)}：${esc(value)}</span>`;
+    if (value == null || value === "") return "";
+    const body = `${esc(label)} ${esc(value)}`;
+    return url ? `<a class="id-chip" href="#" data-external-url="${esc(url)}">${body}</a>` : `<span class="id-chip">${body}</span>`;
   }
 
-  function renderDrug(data) {
-    if (!data?.success) {
-      $("#results").innerHTML = `${warningHtml(data?.warnings)}<div class="notice-card"><strong>没有找到药物记录</strong><p>可以尝试通用名、商品名、ChEMBL ID 或更准确的英文拼写。</p></div>`;
-      setStatus("没有找到匹配药物");
+  function compactValue(value, limit = 3) {
+    const items = values(value).map(clean).filter(Boolean);
+    if (!items.length) return "—";
+    const visible = items.slice(0, limit).join("；");
+    return items.length > limit ? `${visible}；… 共 ${items.length} 项` : visible;
+  }
+
+  function fact(label, value) {
+    const displayValue = compactValue(value);
+    return `<div class="fact"><div class="fact-label">${esc(label)}</div><div class="fact-value" title="${esc(displayValue)}">${esc(displayValue)}</div></div>`;
+  }
+
+  function tags(items) {
+    const rows = values(items).map(item => typeof item === "object" ? `${item.code ? `${item.code} · ` : ""}${item.name || ""}` : clean(item)).filter(Boolean);
+    return rows.length ? `<div class="tag-row">${rows.slice(0, 40).map(item => `<span class="tag">${esc(item)}</span>`).join("")}</div>` : '<p class="detail-text">暂无记录。</p>';
+  }
+
+  function record(title, meta, url = "") {
+    const heading = url ? `<a href="#" data-external-url="${esc(url)}">${esc(title || "—")}</a>` : esc(title || "—");
+    return `<div class="record"><div class="record-title">${heading}</div>${meta ? `<div class="record-meta">${meta}</div>` : ""}</div>`;
+  }
+
+  function detailSection(title, count, body, open = false) {
+    const badge = count != null ? `<span class="source-badge">${esc(count)}</span>` : "";
+    return `<details class="drug-section"${open ? " open" : ""}><summary><span>${esc(title)}</span>${badge}</summary><div class="section-content">${body}</div></details>`;
+  }
+
+  function renderDrug(result, error = "") {
+    const query = result?.query || clean($("#query-input").value);
+    if (error) {
+      return `<section class="result-block"><div class="result-block-heading"><div class="heading-title"><span class="heading-label">DRUG</span><h2>${esc(query || "药物查询")}</h2></div></div><div class="notice error"><strong>药物查询失败</strong>${esc(error)}</div></section>`;
+    }
+    if (!result) return loadingBlock("DRUG", query);
+    if (!result.success) {
+      return `<section class="result-block"><div class="result-block-heading"><div class="heading-title"><span class="heading-label">DRUG</span><h2>${esc(query)}</h2></div><span class="source-badge">未命中</span></div><div class="not-found"><span class="not-found-mark">Rx</span><strong>未找到该药物</strong><p>已查询 DrugShop 的 RxNorm、ChEMBL、PubChem、FDA 与 ClinicalTrials.gov 数据链路。</p></div></section>`;
+    }
+
+    const ids = result.identifiers || {};
+    const names = result.names || {};
+    const structure = result.structure || {};
+    const prescription = result.prescription || {};
+    const mechanisms = values(result.mechanisms);
+    const indications = values(result.indications).sort((a, b) => Number(b.maxPhase ?? -1) - Number(a.maxPhase ?? -1));
+    const approvals = values(result.approvals);
+    const trials = values(result.trials);
+    const activities = values(result.preclinical);
+    const classes = result.classes || {};
+
+    const idRows = [
+      identifier("RxCUI", ids.rxcui, result.sources?.rxnorm),
+      identifier("ChEMBL", ids.chembl, result.sources?.chembl),
+      identifier("CID", ids.pubchemCid, result.sources?.pubchem)
+    ].filter(Boolean).join("");
+
+    const summary = `<div class="drug-summary"><div class="drug-name-row"><div><h3>${esc(result.name || query)}</h3><div class="drug-query">查询词：${esc(query)}</div></div><div class="id-row">${idRows}</div></div><div class="fact-grid">${fact("通用名", names.generic)}${fact("商品名", names.brands)}${fact("分子式", structure.formula)}${fact("分子量", structure.molecularWeight)}${fact("分子类型", result.format?.description)}${fact("最高开发阶段", phaseLabel(result.development?.maxPhase))}</div></div>`;
+
+    const identity = `<div class="subheading">通用名</div>${tags(names.generic)}<div class="subheading">商品名</div>${tags(names.brands)}<div class="subheading">别名 / 研发编号</div>${tags(names.aliases)}<div class="subheading">处方信息</div><p class="detail-text">剂型：${esc(valueOrDash(prescription.rxtermsDoseForm))}<br>给药途径：${esc(valueOrDash(prescription.route))}<br>规格：${esc(valueOrDash(prescription.strength))}</p>${structure.iupac ? `<div class="subheading">IUPAC</div><p class="detail-text">${esc(structure.iupac)}</p>` : ""}${structure.smiles ? `<div class="subheading">SMILES</div><p class="detail-text">${esc(structure.smiles)}</p>` : ""}`;
+
+    const mechanismBody = mechanisms.length
+      ? `<div class="record-list">${mechanisms.slice(0, 40).map(row => record(
+        [row.targetShortName || row.targetGene || row.target, row.action].filter(Boolean).join(" · "),
+        `${row.mechanism ? `<strong>机制：</strong>${esc(row.mechanism)}<br>` : ""}${row.target ? `<strong>靶点：</strong>${esc(row.target)}${row.targetAccession ? ` · ${esc(row.targetAccession)}` : ""}` : ""}${row.targetFunction ? `<br>${esc(row.targetFunction)}` : ""}`,
+        row.targetUrl
+      )).join("")}</div>`
+      : '<p class="detail-text">暂无 ChEMBL 机制记录。</p>';
+
+    const classRows = [
+      ...values(classes.atc).map(item => typeof item === "object" ? `ATC ${item.code || ""} · ${item.name || ""}` : `ATC · ${item}`),
+      ...values(classes.epc).map(item => `EPC · ${item}`),
+      ...values(classes.moa).map(item => `MOA · ${item}`),
+      ...values(classes.pe).map(item => `PE · ${item}`)
+    ];
+
+    const indicationBody = `<div class="subheading">RxClass / ATC</div>${tags(classRows)}<div class="subheading">适应症</div>${indications.length ? `<div class="record-list">${indications.slice(0, 30).map(row => record(row.name || "未命名适应症", `最高阶段：${esc(phaseLabel(row.maxPhase))}`)).join("")}</div>` : '<p class="detail-text">暂无 ChEMBL 适应症记录。</p>'}`;
+
+    const approvalBody = approvals.length
+      ? `<div class="record-list">${approvals.slice(0, 20).map(row => record(
+        [...values(row.brandNames), ...values(row.genericNames)].join(" / ") || row.applicationNumber,
+        `申请号：${esc(valueOrDash(row.applicationNumber))}<br>申办方：${esc(valueOrDash(row.sponsor))}<br>首次批准：${esc(valueOrDash(row.firstApprovalDate))}`
+      )).join("")}</div>`
+      : '<p class="detail-text">暂无 FDA Drugs@FDA 批准记录。</p>';
+
+    const trialBody = trials.length
+      ? `<div class="record-list">${trials.slice(0, 20).map(row => record(
+        `${row.id || "NCT"} · ${row.title || "未命名研究"}`,
+        `${esc([row.status, ...values(row.phases)].filter(Boolean).join(" · ") || "状态未标注")}<br>${esc(values(row.conditions).join("；") || "适应症未标注")}${row.primaryOutcome ? `<br><strong>主要终点：</strong>${esc(row.primaryOutcome)}` : ""}${row.primaryResult ? `<br><strong>主要结果：</strong>${esc(row.primaryResult)}` : ""}`,
+        row.url
+      )).join("")}</div>`
+      : '<p class="detail-text">暂无 ClinicalTrials.gov 试验结果。</p>';
+
+    const activityBody = activities.length
+      ? `<p class="detail-text">以下是 ChEMBL 标准化活性记录，仅用于检索，不等同于完整临床前研究。</p><div class="record-list">${activities.slice(0, 20).map(row => record(
+        `${row.type || "活性"} ${row.relation || ""} ${row.value || ""} ${row.units || ""}`.trim(),
+        `${esc(row.target || row.targetId || "靶点未标注")} · ${esc(row.organism || "物种未标注")}${row.pchembl ? `<br>pChEMBL：${esc(row.pchembl)}` : ""}${row.assay ? `<br>${esc(row.assay)}` : ""}`
+      )).join("")}</div>`
+      : '<p class="detail-text">暂无 ChEMBL 标准化活性记录。</p>';
+
+    const sourceRows = Object.entries(result.sources || {}).filter(([, url]) => url).map(([name, url]) => `<a href="#" data-external-url="${esc(url)}">${esc(name)} ↗</a>`).join("");
+    const sources = sourceRows ? detailSection("原始数据源", Object.values(result.sources || {}).filter(Boolean).length, `<div class="source-links">${sourceRows}</div>`) : "";
+
+    return `<section class="result-block"><div class="result-block-heading"><div class="heading-title"><span class="heading-label">DRUG</span><h2>${esc(result.name || query)}</h2></div><span class="phase-chip">${esc(phaseLabel(result.development?.maxPhase))}</span></div>${summary}${detailSection("名称、结构与处方", null, identity)}${detailSection("靶点与作用机制", mechanisms.length, mechanismBody)}${detailSection("分类与适应症", indications.length, indicationBody)}${detailSection("FDA 批准记录", approvals.length, approvalBody)}${detailSection("临床试验", trials.length, trialBody)}${detailSection("药理活性", activities.length, activityBody)}${sources}${warningDetails(result.warnings)}</section>`;
+  }
+
+  function renderResults({ word = undefined, drug = undefined, errors = {} }) {
+    const blocks = [];
+    if (word !== undefined) blocks.push(renderWord(word, errors.word));
+    if (drug !== undefined) blocks.push(renderDrug(drug, errors.drug));
+    $("#results").innerHTML = `<div class="result-stack">${blocks.join("")}</div>`;
+    $("#results").scrollTop = 0;
+  }
+
+  async function runManual(kind) {
+    const query = clean($("#query-input").value);
+    if (!query) {
+      setRequestStatus("请先输入查询内容", "error");
+      $("#query-input").focus();
       return;
     }
-    const ids = data.identifiers || {};
-    const names = data.names || {};
-    const classes = data.classes || {};
-    const structure = data.structure || {};
-    const mechanisms = data.mechanisms || [];
-    const indications = data.indications || [];
-    const trials = data.trials || [];
-    const approvals = data.approvals || [];
-    const sourceLinks = Object.entries(data.sources || {}).filter(([, url]) => url).map(([name, url]) => `<a class="drug-link" href="${esc(url)}" data-external-url="${esc(url)}">${esc(name)} ↗</a>`).join("");
-    const mechanismsHtml = mechanisms.length ? `<table class="drug-table"><thead><tr><th>靶点</th><th>作用类型</th><th>机制</th><th>蛋白 / 基因</th></tr></thead><tbody>${mechanisms.slice(0, 30).map(row => `<tr><td>${row.targetUrl ? `<a class="drug-link" href="${esc(row.targetUrl)}" data-external-url="${esc(row.targetUrl)}">${esc(row.target || "—")}</a>` : esc(row.target || "—")}</td><td>${esc(row.action || "—")}</td><td>${esc(row.mechanism || "—")}</td><td>${esc([row.targetShortName, row.targetGene, row.targetAccession].filter(Boolean).join(" · ") || "—")}</td></tr>`).join("")}</tbody></table>` : '<div class="notice-card">暂无 ChEMBL 机制记录。</div>';
-    const trialsHtml = trials.length ? `<table class="drug-table"><thead><tr><th>NCT</th><th>研究</th><th>状态 / 分期</th><th>日期</th></tr></thead><tbody>${trials.slice(0, 20).map(row => `<tr><td><a class="drug-link" href="${esc(row.url)}" data-external-url="${esc(row.url)}">${esc(row.id)}</a></td><td>${esc(row.title || "—")}</td><td>${esc([row.status, ...(row.phases || [])].filter(Boolean).join(" · ") || "—")}</td><td>${esc([row.startDate, row.completionDate].filter(Boolean).join(" → ") || "—")}</td></tr>`).join("")}</tbody></table>` : '<div class="notice-card">暂无 ClinicalTrials.gov 结果。</div>';
-    const approvalHtml = approvals.length ? `<div class="drug-list">${approvals.slice(0, 15).map(row => `<div class="drug-list-item"><strong>${esc([...(row.brandNames || []), ...(row.genericNames || [])].join("；") || "FDA 记录")}</strong><br>申请号：${esc(row.applicationNumber || "—")}　赞助方：${esc(row.sponsor || "—")}　首个批准日期：${esc(row.firstApprovalDate || "—")}</div>`).join("")}</div>` : '<div class="notice-card">暂无 FDA 记录。</div>';
-    const classesHtml = ["atc", "epc", "moa", "pe"].flatMap(key => (classes[key] || []).map(value => typeof value === "object" ? `${key.toUpperCase()} ${value.code || ""}: ${value.name || ""}` : `${key.toUpperCase()}: ${value}`));
-    $("#results").innerHTML = `${warningHtml(data.warnings)}<article class="drug-card"><div class="drug-header"><div><h2>${esc(data.name)}</h2><div class="drug-query">查询词：${esc(data.query)}${data.format?.description ? `　·　${esc(data.format.description)}` : ""}</div></div><div class="identifier-list">${identifier("RxCUI", ids.rxcui, data.sources?.rxnorm)}${identifier("ChEMBL", ids.chembl, data.sources?.chembl)}${identifier("PubChem", ids.pubchemCid, data.sources?.pubchem)}</div></div><div class="drug-body"><section class="drug-section"><h3>名称与结构</h3><div class="data-grid"><div class="data-cell"><div class="data-label">通用名</div><div class="data-value">${esc(valueOrDash(names.generic))}</div></div><div class="data-cell"><div class="data-label">商品名</div><div class="data-value">${esc(valueOrDash(names.brands))}</div></div><div class="data-cell"><div class="data-label">别名</div><div class="data-value">${esc(valueOrDash(names.aliases))}</div></div><div class="data-cell"><div class="data-label">分子式</div><div class="data-value">${esc(valueOrDash(structure.formula))}</div></div><div class="data-cell"><div class="data-label">分子量</div><div class="data-value">${esc(valueOrDash(structure.molecularWeight))}</div></div><div class="data-cell"><div class="data-label">最高开发阶段</div><div class="data-value">${esc(valueOrDash(data.development?.maxPhase))}</div></div></div></section><section class="drug-section"><h3>RxClass 分类</h3>${classesHtml.length ? `<div class="tag-row">${classesHtml.slice(0, 40).map(value => `<span class="tag">${esc(value)}</span>`).join("")}</div>` : '<div class="notice-card">暂无分类数据。</div>'}</section><section class="drug-section"><h3>靶点与作用机制</h3>${mechanismsHtml}</section><section class="drug-section"><h3>适应症与 FDA 批准</h3>${indications.length ? `<div class="drug-list">${indications.slice(0, 20).map(row => `<div class="drug-list-item">${esc(row.name || "—")}　<span class="tag">最高阶段 ${esc(row.maxPhase ?? "—")}</span></div>`).join("")}</div>` : ""}${approvalHtml}</section><section class="drug-section"><h3>临床试验</h3>${trialsHtml}</section><div class="drug-footer"><span>公开来源：</span>${sourceLinks}</div></div></article>`;
-    setStatus(`已完成：${data.name} · ${trials.length} 项试验 · ${mechanisms.length} 条机制记录`);
+    const requestId = ++state.requestId;
+    state.activeSelectionRequestId = null;
+    setBusy(true);
+    setRequestStatus(kind === "drug" ? "正在查询 DrugShop…" : "本地优先查词中…");
+    showLoading(kind, query);
+    try {
+      const result = kind === "drug" ? await api.lookupDrug(query) : await api.lookupWord(query);
+      if (requestId !== state.requestId) return;
+      renderResults(kind === "drug" ? { drug: result } : { word: result });
+      setRequestStatus(kind === "drug"
+        ? (result.success ? "药物数据已返回" : "未找到该药物")
+        : (result.strategy === "local" ? "本地词典命中" : result.success ? "云端回退完成" : "云端未返回结果"), result.success === false ? "error" : "");
+    } catch (error) {
+      if (requestId !== state.requestId) return;
+      renderResults(kind === "drug" ? { drug: null, errors: { drug: error.message || String(error) } } : { word: null, errors: { word: error.message || String(error) } });
+      setRequestStatus("查询失败", "error");
+    } finally {
+      if (requestId === state.requestId) setBusy(false);
+    }
   }
 
-  function setField(id, value) { const element = $(`#${id}`); if (element) element.value = value ?? ""; }
-  function setChecked(id, value) { const element = $(`#${id}`); if (element) element.checked = Boolean(value); }
+  function updateSelectionStatus(status) {
+    state.selectionStatus = { ...state.selectionStatus, ...(status || {}) };
+    const element = $("#selection-status");
+    element.classList.toggle("active", Boolean(state.selectionStatus.active));
+    element.classList.toggle("error", state.selectionStatus.available === false && !state.selectionStatus.active);
+    element.querySelector(".selection-label").textContent = state.selectionStatus.message || (state.selectionStatus.active ? "自动划词已开启" : "自动划词未开启");
+  }
+
+  function renderDictionarySources() {
+    const count = state.sources.length;
+    $("#dictionary-count").textContent = `${count} 个`;
+    $("#dictionary-sources").innerHTML = count
+      ? state.sources.map(source => `<div class="dictionary-source"><span>${esc(source.name)}</span><span>${Number(source.entryCount || 0).toLocaleString()} 条</span></div>`).join("")
+      : '<div class="dictionary-source-empty">尚未安装本地词典</div>';
+  }
+
+  function setField(id, value) {
+    const element = $(`#${id}`);
+    if (element) element.value = value ?? "";
+  }
+
+  function setChecked(id, value) {
+    const element = $(`#${id}`);
+    if (element) element.checked = Boolean(value);
+  }
+
+  function updateGoogleMode() {
+    const cloudMode = $("#google-mode").value === "cloud";
+    $("#google-key-field").classList.toggle("disabled-field", !cloudMode);
+  }
+
   function fillSettings() {
     const settings = state.settings || {};
-    const dictionary = settings.dictionary || {};
     const translation = settings.translation || {};
-    setChecked("oxford-enabled", dictionary.oxford?.enabled);
-    setField("oxford-app-id", dictionary.oxford?.appId);
-    setField("oxford-app-key", dictionary.oxford?.appKey);
-    setField("oxford-locale", dictionary.oxford?.locale || "en-gb");
-    setChecked("merriam-enabled", dictionary.merriamWebster?.enabled);
-    setField("merriam-api-key", dictionary.merriamWebster?.apiKey);
+    setChecked("selection-enabled", settings.behavior?.selectionLookup);
     setChecked("google-enabled", translation.google?.enabled);
-    setField("google-api-key", translation.google?.apiKey);
+    setField("google-mode", translation.google?.mode || (translation.google?.apiKey ? "cloud" : "web"));
+    setField("google-api-key", translation.google?.apiKey || "");
     setChecked("youdao-enabled", translation.youdao?.enabled);
-    setField("youdao-app-key", translation.youdao?.appKey);
-    setField("youdao-app-secret", translation.youdao?.appSecret);
-    setField("translation-source", translation.source || "auto");
+    setField("youdao-app-key", translation.youdao?.appKey || "");
+    setField("youdao-app-secret", translation.youdao?.appSecret || "");
     setField("translation-target", translation.target || "zh-CN");
-    renderSources();
+    setChecked("hide-on-close", settings.window?.hideOnClose !== false);
+    $("#settings-status").textContent = "";
+    renderDictionarySources();
+    updateGoogleMode();
   }
 
   function readSettings() {
-    const current = JSON.parse(JSON.stringify(state.settings || {}));
-    current.dictionary ||= {};
-    current.dictionary.oxford = {
-      ...(current.dictionary.oxford || {}),
-      enabled: $("#oxford-enabled").checked,
-      appId: $("#oxford-app-id").value.trim(),
-      appKey: $("#oxford-app-key").value.trim(),
-      locale: $("#oxford-locale").value.trim() || "en-gb"
-    };
-    current.dictionary.merriamWebster = {
-      ...(current.dictionary.merriamWebster || {}),
-      enabled: $("#merriam-enabled").checked,
-      apiKey: $("#merriam-api-key").value.trim()
-    };
-    current.translation ||= {};
-    current.translation.source = $("#translation-source").value.trim() || "auto";
-    current.translation.target = $("#translation-target").value.trim() || "zh-CN";
-    current.translation.google = {
-      ...(current.translation.google || {}),
-      enabled: $("#google-enabled").checked,
-      apiKey: $("#google-api-key").value.trim()
-    };
-    current.translation.youdao = {
-      ...(current.translation.youdao || {}),
-      enabled: $("#youdao-enabled").checked,
-      appKey: $("#youdao-app-key").value.trim(),
-      appSecret: $("#youdao-app-secret").value.trim()
-    };
-    return current;
+    const settings = JSON.parse(JSON.stringify(state.settings || {}));
+    settings.translation ||= {};
+    settings.translation.google ||= {};
+    settings.translation.youdao ||= {};
+    settings.behavior ||= {};
+    settings.window ||= {};
+    settings.translation.source = "auto";
+    settings.translation.target = $("#translation-target").value || "zh-CN";
+    settings.translation.google.enabled = $("#google-enabled").checked;
+    settings.translation.google.mode = $("#google-mode").value || "web";
+    settings.translation.google.apiKey = clean($("#google-api-key").value);
+    settings.translation.youdao.enabled = $("#youdao-enabled").checked;
+    settings.translation.youdao.appKey = clean($("#youdao-app-key").value);
+    settings.translation.youdao.appSecret = clean($("#youdao-app-secret").value);
+    settings.behavior.selectionLookup = $("#selection-enabled").checked;
+    settings.behavior.selectionMaxLength = Number(settings.behavior.selectionMaxLength) || 500;
+    settings.window.hideOnClose = $("#hide-on-close").checked;
+    settings.window.alwaysOnTop = state.pinned;
+    return settings;
   }
 
-  async function importDictionary() {
-    $("#settings-status").textContent = "正在导入…";
-    try {
-      const result = await api.importDictionary();
-      if (!result.canceled) {
-        state.sources = result.sources || [];
-        renderSources();
-        setStatus("词典已导入");
-      }
-      $("#settings-status").textContent = result.canceled ? "" : "导入成功";
-    } catch (error) {
-      $("#settings-status").textContent = error.message || "导入失败";
-    }
+  function openSettings() {
+    fillSettings();
+    if (!$("#settings-dialog").open) $("#settings-dialog").showModal();
   }
 
   function bindEvents() {
-    $$(".mode-button").forEach(button => button.addEventListener("click", () => setMode(button.dataset.mode)));
-    $("#search-form").addEventListener("submit", event => { event.preventDefault(); search(); });
-    $("#clear-button").addEventListener("click", () => { $("#query-input").value = ""; $("#results").innerHTML = '<div class="welcome-card"><div class="welcome-orbit">M</div><div><h2>准备开始查询</h2><p>输入查询内容，Medict 会根据当前模式调用对应的数据源。</p></div></div>'; setStatus(""); $("#query-input").focus(); });
-    $("#settings-button").addEventListener("click", () => { fillSettings(); $("#settings-dialog").showModal(); });
+    $("#word-button").addEventListener("click", () => runManual("word"));
+    $("#drug-button").addEventListener("click", () => runManual("drug"));
+    $("#clear-button").addEventListener("click", () => {
+      state.requestId += 1;
+      state.activeSelectionRequestId = null;
+      setBusy(false);
+      $("#query-input").value = "";
+      setRequestStatus("");
+      renderIdle();
+      $("#query-input").focus();
+    });
+    $("#query-input").addEventListener("keydown", event => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        runManual(event.ctrlKey ? "drug" : "word");
+      }
+      if (event.key === "Escape") api.hideWindow();
+    });
+
+    $("#settings-button").addEventListener("click", openSettings);
+    $("#selection-status").addEventListener("click", openSettings);
     $("#close-settings-button").addEventListener("click", () => $("#settings-dialog").close());
     $("#cancel-settings-button").addEventListener("click", () => $("#settings-dialog").close());
+    $("#google-mode").addEventListener("change", updateGoogleMode);
     $("#settings-form").addEventListener("submit", async event => {
       event.preventDefault();
+      const next = readSettings();
+      if (next.translation.google.enabled && next.translation.google.mode === "cloud" && !next.translation.google.apiKey) {
+        $("#settings-status").textContent = "请填写 Google Cloud Key";
+        return;
+      }
+      if (next.translation.youdao.enabled && (!next.translation.youdao.appKey || !next.translation.youdao.appSecret)) {
+        $("#settings-status").textContent = "请填写有道凭据";
+        return;
+      }
+      $("#settings-status").textContent = "保存中…";
       try {
-        state.settings = await api.saveSettings(readSettings());
-        updateConnectionBadge();
+        state.settings = await api.saveSettings(next);
         $("#settings-status").textContent = "已保存";
-        setTimeout(() => $("#settings-dialog").close(), 350);
+        setTimeout(() => {
+          if ($("#settings-dialog").open) $("#settings-dialog").close();
+        }, 320);
       } catch (error) {
-        $("#settings-status").textContent = error.message || "保存失败";
+        $("#settings-status").textContent = error.message || String(error);
       }
     });
-    $("#import-dictionary-button").addEventListener("click", importDictionary);
-    $("#settings-import-button").addEventListener("click", importDictionary);
-    $("#query-input").addEventListener("keydown", event => {
-      if (event.key === "Escape") { event.target.value = ""; setStatus(""); }
+    $("#quit-button").addEventListener("click", () => api.quit());
+
+    $("#minimize-button").addEventListener("click", () => api.minimizeWindow());
+    $("#close-button").addEventListener("click", () => api.hideWindow());
+    $("#pin-button").addEventListener("click", async () => {
+      state.pinned = await api.togglePin();
+      $("#pin-button").classList.toggle("active", state.pinned);
+      $("#pin-button").title = state.pinned ? "取消置顶" : "置顶窗口";
     });
-    document.addEventListener("keydown", event => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") { event.preventDefault(); $("#query-input").focus(); }
-    });
+
     document.addEventListener("click", event => {
-      const history = event.target.closest("[data-history-query]");
-      if (history) { $("#query-input").value = history.dataset.historyQuery; search(); return; }
-      const quick = event.target.closest("[data-quick-query]");
-      if (quick) { $("#query-input").value = quick.dataset.quickQuery; search(); return; }
-      const suggestion = event.target.closest("[data-query-value]");
-      if (suggestion) { $("#query-input").value = suggestion.dataset.queryValue; search(); return; }
+      const queryButton = event.target.closest("[data-query-word]");
+      if (queryButton) {
+        $("#query-input").value = queryButton.dataset.queryWord;
+        runManual("word");
+        return;
+      }
       const external = event.target.closest("[data-external-url]");
-      if (external) { event.preventDefault(); api.openExternal(external.dataset.externalUrl); return; }
-      const audio = event.target.closest("[data-audio-url]");
-      if (audio) { event.preventDefault(); new Audio(audio.dataset.audioUrl).play().catch(() => setStatus("音频无法播放", "error")); }
+      if (external) {
+        event.preventDefault();
+        api.openExternal(external.dataset.externalUrl).catch(error => setRequestStatus(error.message || String(error), "error"));
+      }
     });
+
+    api.onSelectionPending(payload => {
+      state.requestId += 1;
+      state.activeSelectionRequestId = payload.requestId;
+      $("#query-input").value = payload.query;
+      setBusy(false);
+      setRequestStatus("划词：查词与药物查询并行执行中…");
+      showLoading("selection", payload.query);
+    });
+    api.onSelectionResult(payload => {
+      if (state.activeSelectionRequestId !== payload.requestId) return;
+      renderResults({ word: payload.word, drug: payload.drug, errors: payload.errors || {} });
+      setRequestStatus(payload.drug?.success ? "划词查询完成 · 已匹配药物" : "划词查询完成 · 未找到该药物");
+    });
+    api.onSelectionStatus(updateSelectionStatus);
   }
 
   async function init() {
     if (!api) {
-      $("#results").innerHTML = '<div class="notice-card warning"><strong>桌面桥接不可用</strong><p>请从 Electron 应用启动 Medict，而不是直接打开 HTML 文件。</p></div>';
+      $("#results").innerHTML = '<div class="notice error"><strong>桌面桥接不可用</strong>请从 Medict 桌面程序启动。</div>';
       return;
     }
-    try {
-      state.settings = await api.getSettings();
-      state.sources = await api.listDictionaries();
-    } catch (error) {
-      setStatus(`初始化失败：${error.message}`, "error");
-    }
-    renderHistory();
-    renderSources();
     bindEvents();
-    setMode("dictionary");
-    $("#query-input").focus();
+    try {
+      const [settings, sources, pinned, selectionStatus] = await Promise.all([
+        api.getSettings(),
+        api.listDictionaries(),
+        api.isPinned(),
+        api.getSelectionStatus()
+      ]);
+      state.settings = settings;
+      state.sources = sources;
+      state.pinned = pinned;
+      $("#pin-button").classList.toggle("active", pinned);
+      updateSelectionStatus(selectionStatus);
+      renderIdle();
+      $("#query-input").focus();
+    } catch (error) {
+      $("#results").innerHTML = `<div class="notice error"><strong>Medict 初始化失败</strong>${esc(error.message || error)}</div>`;
+    }
   }
 
   init();

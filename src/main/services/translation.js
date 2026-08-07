@@ -39,6 +39,9 @@ function buildYoudaoPayload(text, config = {}, options = {}) {
 }
 
 async function translateGoogle(text, config = {}) {
+  if (!config.apiKey || config.mode === "web") {
+    return translateGoogleWeb(text, config);
+  }
   const query = new URLSearchParams({ key: config.apiKey });
   const body = {
     q: String(text),
@@ -63,6 +66,33 @@ async function translateGoogle(text, config = {}) {
       license: "Google Cloud API terms",
       url: "https://cloud.google.com/translate"
     }
+  };
+}
+
+async function translateGoogleWeb(text, config = {}) {
+  const query = new URLSearchParams({
+    client: "gtx",
+    sl: config.source && config.source !== "auto" ? config.source : "auto",
+    tl: config.target || "zh-CN",
+    dt: "t",
+    q: String(text)
+  });
+  const data = await fetchJson(`https://translate.googleapis.com/translate_a/single?${query.toString()}`, {}, 20000);
+  const translations = (Array.isArray(data?.[0]) ? data[0] : [])
+    .map(item => clean(item?.[0]))
+    .filter(Boolean);
+  return {
+    provider: "google",
+    name: "Google 翻译",
+    detectedSource: clean(data?.[2] || config.source || ""),
+    translations: [...new Set(translations)],
+    source: {
+      id: "google-web",
+      name: "Google 翻译",
+      license: "Google 服务条款；兼容接口可能变更",
+      url: "https://translate.google.com/"
+    },
+    mode: "web"
   };
 }
 
@@ -101,7 +131,7 @@ async function translateText(text, settings = {}) {
   const target = translation.target || "zh-CN";
   const warnings = [];
   const tasks = [];
-  if (translation.google?.enabled && translation.google.apiKey) {
+  if (translation.google?.enabled && (translation.google.apiKey || translation.google.mode === "web")) {
     tasks.push(translateGoogle(query, { ...translation.google, source, target }).catch(error => {
       warnings.push(`Google：${error.message}`);
       return null;
@@ -127,6 +157,7 @@ module.exports = {
   buildYoudaoPayload,
   inputForYoudao,
   translateGoogle,
+  translateGoogleWeb,
   translateText,
   translateYoudao
 };

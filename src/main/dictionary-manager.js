@@ -168,7 +168,7 @@ class DictionaryManager {
 
   async load() {
     await fs.mkdir(this.userDictionaryDir, { recursive: true });
-    const builtin = await this.loadOne(this.builtinPath, "builtin");
+    const builtin = this.builtinPath ? await this.loadOne(this.builtinPath, "builtin") : null;
     const files = await fs.readdir(this.userDictionaryDir, { withFileTypes: true });
     const imported = [];
     for (const file of files) {
@@ -226,9 +226,49 @@ class DictionaryManager {
   }
 
   async search(query, settings = {}) {
+    const local = await this.searchLocal(query);
+    const warnings = [...local.warnings];
+    const results = [...local.results];
+    const normalizedQuery = text(query).toLowerCase();
+    if (!normalizedQuery) return { ...local, type: "dictionary" };
+
+    const dictionarySettings = settings.dictionary || {};
+    const onlineTasks = [];
+    if (dictionarySettings.oxford?.enabled && dictionarySettings.oxford.appId && dictionarySettings.oxford.appKey) {
+      onlineTasks.push(queryOxford(normalizedQuery, dictionarySettings.oxford).catch(error => {
+        warnings.push(`Oxford：${error.message}`);
+        return null;
+      }));
+    }
+    if (dictionarySettings.merriamWebster?.enabled && dictionarySettings.merriamWebster.apiKey) {
+      onlineTasks.push(queryMerriamWebster(normalizedQuery, dictionarySettings.merriamWebster).catch(error => {
+        warnings.push(`Merriam-Webster：${error.message}`);
+        return null;
+      }));
+    }
+    const onlineResults = (await Promise.all(onlineTasks)).filter(Boolean);
+    return {
+      ...local,
+      type: "dictionary",
+      results: [...results, ...onlineResults],
+      warnings
+    };
+  }
+
+  async searchLocal(query) {
     const normalizedQuery = text(query).toLowerCase();
     const warnings = [];
-    if (!normalizedQuery) return { type: "dictionary", query: text(query), results: [], warnings };
+    if (!normalizedQuery) {
+      return {
+        type: "local-dictionary",
+        query: text(query),
+        results: [],
+        exactResults: [],
+        suggestions: [],
+        warnings,
+        sources: this.listSources()
+      };
+    }
 
     const localResults = [];
     for (const source of this.sources) {
@@ -248,26 +288,12 @@ class DictionaryManager {
     }
     localResults.sort((left, right) => left.score - right.score || left.entry.word.length - right.entry.word.length);
     const results = localResults.slice(0, 40).map(item => ({ type: "local", ...item.entry }));
-
-    const dictionarySettings = settings.dictionary || {};
-    const onlineTasks = [];
-    if (dictionarySettings.oxford?.enabled && dictionarySettings.oxford.appId && dictionarySettings.oxford.appKey) {
-      onlineTasks.push(queryOxford(normalizedQuery, dictionarySettings.oxford).catch(error => {
-        warnings.push(`Oxford：${error.message}`);
-        return null;
-      }));
-    }
-    if (dictionarySettings.merriamWebster?.enabled && dictionarySettings.merriamWebster.apiKey) {
-      onlineTasks.push(queryMerriamWebster(normalizedQuery, dictionarySettings.merriamWebster).catch(error => {
-        warnings.push(`Merriam-Webster：${error.message}`);
-        return null;
-      }));
-    }
-    const onlineResults = (await Promise.all(onlineTasks)).filter(Boolean);
     return {
-      type: "dictionary",
+      type: "local-dictionary",
       query: text(query),
-      results: [...results, ...onlineResults],
+      results,
+      exactResults: results.filter(entry => entry.word.toLowerCase() === normalizedQuery),
+      suggestions: results.filter(entry => entry.word.toLowerCase() !== normalizedQuery).slice(0, 8),
       warnings,
       sources: this.listSources()
     };
