@@ -345,7 +345,7 @@ button:disabled { cursor: wait; opacity: .62; }
 }
 
 .whole-word-translation { padding: 10px 12px 12px; border-top: 1px solid #eeeeec; background: #fafbfc; }
-.whole-word-translation.quick-meaning { border-top: 0; border-bottom: 1px solid #eeeeec; background: #fbfcff; }
+.whole-word-translation.cloud-after-dictionary { border-top: 1px solid #eeeeec; background: #fbfcff; }
 .whole-word-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 9px; }
 .whole-word-heading strong { color: #50555c; font-size: 11px; }
 .whole-word-heading span { color: #9a9ea4; font-size: 8px; text-align: right; }
@@ -509,6 +509,12 @@ kbd { padding: 1px 4px; border: 1px solid #d5d6d4; border-bottom-width: 2px; bor
   user-select: text;
 }
 .field input:focus, .field select:focus { border-color: #91a7e9; box-shadow: 0 0 0 2px rgba(76, 114, 232, .1); }
+.shortcut-field { margin-top: 11px; }
+.shortcut-input-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.shortcut-input { cursor: pointer; font-weight: 650; letter-spacing: .02em; }
+.shortcut-input.recording { border-color: var(--blue); color: var(--blue-deep); background: var(--blue-soft); box-shadow: 0 0 0 2px rgba(76, 114, 232, .1); }
+.shortcut-clear-button { min-width: 48px; padding: 0 9px; border-radius: 6px; color: #6e7278; background: #ececea; font-size: 10px; }
+.shortcut-clear-button:hover { color: #4d5157; background: #dfdfdc; }
 .two-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
 .compact-field { max-width: 180px; }
 .disabled-field { opacity: .45; }

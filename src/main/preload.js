@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld("medict", {
   lookupDrug: query => ipcRenderer.invoke("lookup:drug", query),
   lookupSelection: query => ipcRenderer.invoke("lookup:selection", query),
   getSelectionStatus: () => ipcRenderer.invoke("selection:status"),
+  suspendShortcuts: () => ipcRenderer.invoke("shortcuts:suspend"),
+  resumeShortcuts: () => ipcRenderer.invoke("shortcuts:resume"),
   getDrugCacheStats: () => ipcRenderer.invoke("drug-cache:stats"),
   copyText: value => ipcRenderer.invoke("clipboard:write-text", value),
   onSelectionPending: callback => subscribe("selection:pending", callback),

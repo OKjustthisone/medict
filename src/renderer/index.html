@@ -76,12 +76,34 @@
         <section class="settings-section">
           <div class="section-heading">
             <div>
-              <h3>自动划词</h3>
-              <p>鼠标选中文本后，同时执行普通查词和药物查询。</p>
+              <h3>划词后自动查词</h3>
+              <p>打开后，鼠标选中文本并松开时自动查询；关闭后仍可使用“选词后查词”快捷键。</p>
             </div>
             <label class="switch"><input id="selection-enabled" type="checkbox"><span></span></label>
           </div>
-          <p class="subtle-note">仅在 Medict 运行时监听；密码输入框会跳过。选中文本后按 <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>D</kbd> 会立即取词并查询。</p>
+          <p class="subtle-note">仅在 Medict 运行时监听，密码输入框会自动跳过。</p>
+        </section>
+
+        <section class="settings-section">
+          <div class="section-heading">
+            <div>
+              <h3>快捷键</h3>
+              <p>点击快捷键框后，直接按下新的组合键；按 Delete 可清除。</p>
+            </div>
+          </div>
+          <div class="field shortcut-field"><span>打开面板</span>
+            <span class="shortcut-input-row">
+              <input id="shortcut-show-window" class="shortcut-input" type="text" readonly inputmode="none" aria-label="打开面板快捷键" placeholder="未设置">
+              <button class="shortcut-clear-button" type="button" data-clear-shortcut="shortcut-show-window">清除</button>
+            </span>
+          </div>
+          <div class="field shortcut-field"><span>选词后查词</span>
+            <span class="shortcut-input-row">
+              <input id="shortcut-selection-lookup" class="shortcut-input" type="text" readonly inputmode="none" aria-label="选词后查词快捷键" placeholder="未设置">
+              <button class="shortcut-clear-button" type="button" data-clear-shortcut="shortcut-selection-lookup">清除</button>
+            </span>
+          </div>
+          <p class="subtle-note">默认：打开面板为 <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>M</kbd>；选中文本后查词为 <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>D</kbd>。</p>
         </section>
 
         <section class="settings-section">

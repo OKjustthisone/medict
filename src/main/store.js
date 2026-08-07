@@ -35,6 +35,10 @@ const DEFAULT_SETTINGS = {
   appearance: {
     fontScale: 115
   },
+  shortcuts: {
+    showWindow: "CommandOrControl+Alt+M",
+    selectionLookup: "CommandOrControl+Alt+D"
+  },
   window: {
     alwaysOnTop: false,
     hideOnClose: true
@@ -81,6 +85,10 @@ function mergeSettings(value) {
     appearance: {
       ...clone(DEFAULT_SETTINGS.appearance),
       ...(source.appearance || {})
+    },
+    shortcuts: {
+      ...clone(DEFAULT_SETTINGS.shortcuts),
+      ...(source.shortcuts || {})
     },
     window: {
       ...clone(DEFAULT_SETTINGS.window),

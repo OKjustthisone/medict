@@ -41,7 +41,7 @@
   function setActiveMode(mode = "word") {
     state.activeMode = mode;
     $("#word-button").classList.toggle("active", mode === "word" || mode === "selection");
-    $("#drug-button").classList.toggle("active", mode === "drug" || mode === "selection");
+    $("#drug-button").classList.toggle("active", mode === "drug");
   }
 
   function applyFontScale(value) {
@@ -54,6 +54,86 @@
     });
   }
 
+  function shortcutLabel(accelerator) {
+    return clean(accelerator)
+      .replace(/CommandOrControl/gi, "Ctrl")
+      .split("+")
+      .map(part => part.trim())
+      .filter(Boolean)
+      .join(" + ");
+  }
+
+  function setShortcutField(id, accelerator) {
+    const element = $(`#${id}`);
+    if (!element) return;
+    element.dataset.accelerator = clean(accelerator);
+    element.value = shortcutLabel(accelerator);
+  }
+
+  function acceleratorFromEvent(event) {
+    if (["Control", "Alt", "Shift", "Meta"].includes(event.key)) return "";
+    const modifiers = [];
+    if (event.ctrlKey) modifiers.push("CommandOrControl");
+    if (event.altKey) modifiers.push("Alt");
+    if (event.shiftKey) modifiers.push("Shift");
+    if (!event.ctrlKey && !event.altKey) {
+      throw new Error("快捷键必须包含 Ctrl 或 Alt");
+    }
+    const aliases = {
+      " ": "Space",
+      Tab: "Tab",
+      Enter: "Enter",
+      Home: "Home",
+      End: "End",
+      PageUp: "PageUp",
+      PageDown: "PageDown",
+      ArrowUp: "Up",
+      ArrowDown: "Down",
+      ArrowLeft: "Left",
+      ArrowRight: "Right"
+    };
+    let key = aliases[event.key] || "";
+    if (/^[a-z0-9]$/i.test(event.key)) key = event.key.toUpperCase();
+    if (/^F(?:[1-9]|1[0-9]|2[0-4])$/i.test(event.key)) key = event.key.toUpperCase();
+    if (!key) throw new Error("请使用字母、数字、功能键或方向键");
+    return [...modifiers, key].join("+");
+  }
+
+  function bindShortcutRecorder(element) {
+    element.addEventListener("focus", () => {
+      element.classList.add("recording");
+      element.value = "请按新的组合键…";
+      $("#settings-status").textContent = "正在录入快捷键";
+    });
+    element.addEventListener("blur", () => {
+      element.classList.remove("recording");
+      element.value = shortcutLabel(element.dataset.accelerator);
+      if ($("#settings-status").textContent === "正在录入快捷键") $("#settings-status").textContent = "";
+    });
+    element.addEventListener("keydown", event => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.key === "Escape") {
+        element.blur();
+        return;
+      }
+      if (["Backspace", "Delete"].includes(event.key) && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+        element.dataset.accelerator = "";
+        element.blur();
+        return;
+      }
+      try {
+        const accelerator = acceleratorFromEvent(event);
+        if (!accelerator) return;
+        element.dataset.accelerator = accelerator;
+        $("#settings-status").textContent = "快捷键已录入，保存后生效";
+        element.blur();
+      } catch (error) {
+        $("#settings-status").textContent = error.message || String(error);
+      }
+    });
+  }
+
   function copyButton(scope, label = "复制") {
     return `<button class="copy-button" type="button" data-copy-scope="${esc(scope)}" title="${esc(label)}" aria-label="${esc(label)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7V4h11v13h-3v3H5V7h3Zm2 0h6v8h1V6h-7v1Zm-3 2v9h7V9H7Z"/></svg></button>`;
   }
@@ -61,7 +141,7 @@
   function readableText(element) {
     if (!element) return "";
     const clone = element.cloneNode(true);
-    clone.querySelectorAll(".copy-button, .sense-number").forEach(item => item.remove());
+    clone.querySelectorAll(".copy-button, .sense-number, .cloud-result-footer, .provider-attribution").forEach(item => item.remove());
     return clean(clone.innerText).replace(/\n{3,}/g, "\n\n");
   }
 
@@ -71,7 +151,7 @@
     if (scope === "input") text = $("#query-input").value;
     if (scope === "result") text = readableText(button.closest(".result-block"));
     if (scope === "sense") text = readableText(button.closest(".sense"));
-    if (scope === "cloud") text = readableText(button.closest(".cloud-result"));
+    if (scope === "cloud") text = clean(button.closest(".cloud-result")?.querySelector(".cloud-translation")?.innerText);
     if (!clean(text)) {
       setRequestStatus("没有可复制的内容", "error");
       return;
@@ -207,7 +287,7 @@
   function renderCloudReference(results, dictionaryMode = false) {
     const rows = values(results);
     if (!rows.length) return "";
-    return `<div class="whole-word-translation${dictionaryMode ? " quick-meaning" : ""}"><div class="whole-word-heading"><strong>${dictionaryMode ? "直接释义" : "翻译结果"}</strong><span>${dictionaryMode ? "先看核心意思，再看下方详细释义" : ""}</span></div>${rows.map(renderCloudResult).join("")}</div>`;
+    return `<div class="whole-word-translation${dictionaryMode ? " cloud-after-dictionary" : ""}"><div class="whole-word-heading"><strong>${dictionaryMode ? "整词翻译" : "翻译结果"}</strong><span>${dictionaryMode ? "Google / 有道补充" : ""}</span></div>${rows.map(renderCloudResult).join("")}</div>`;
   }
 
   function renderSuggestions(suggestions) {
@@ -228,7 +308,7 @@
     if (result.strategy === "local" && result.localResults?.length) {
       content = result.localResults.map(renderDictionaryEntry).join("");
     } else if (result.dictionaryResults?.length) {
-      content = `${renderCloudReference(result.cloudResults, true)}${result.dictionaryResults.map(renderDictionaryEntry).join("")}${renderSuggestions(result.suggestions)}`;
+      content = `${result.dictionaryResults.map(renderDictionaryEntry).join("")}${renderCloudReference(result.cloudResults, true)}${renderSuggestions(result.suggestions)}`;
     } else if (result.cloudResults?.length) {
       content = `<div class="result-body">${renderCloudReference(result.cloudResults)}${renderSuggestions(result.suggestions)}</div>`;
     } else {
@@ -444,6 +524,8 @@
     setField("youdao-app-secret", translation.youdao?.appSecret || "");
     setField("translation-target", translation.target || "zh-CN");
     setField("font-scale", settings.appearance?.fontScale || 115);
+    setShortcutField("shortcut-show-window", settings.shortcuts?.showWindow ?? "CommandOrControl+Alt+M");
+    setShortcutField("shortcut-selection-lookup", settings.shortcuts?.selectionLookup ?? "CommandOrControl+Alt+D");
     setChecked("hide-on-close", settings.window?.hideOnClose !== false);
     $("#settings-status").textContent = "";
     renderDictionarySources();
@@ -457,6 +539,7 @@
     settings.translation.youdao ||= {};
     settings.behavior ||= {};
     settings.appearance ||= {};
+    settings.shortcuts ||= {};
     settings.window ||= {};
     settings.translation.source = "auto";
     settings.translation.target = $("#translation-target").value || "zh-CN";
@@ -469,13 +552,20 @@
     settings.behavior.selectionLookup = $("#selection-enabled").checked;
     settings.behavior.selectionMaxLength = Number(settings.behavior.selectionMaxLength) || 500;
     settings.appearance.fontScale = Math.max(100, Math.min(145, Number($("#font-scale").value) || 115));
+    settings.shortcuts.showWindow = clean($("#shortcut-show-window").dataset.accelerator);
+    settings.shortcuts.selectionLookup = clean($("#shortcut-selection-lookup").dataset.accelerator);
     settings.window.hideOnClose = $("#hide-on-close").checked;
     settings.window.alwaysOnTop = state.pinned;
     return settings;
   }
 
-  function openSettings() {
+  async function openSettings() {
     fillSettings();
+    try {
+      await api.suspendShortcuts();
+    } catch (error) {
+      $("#settings-status").textContent = `快捷键暂时停用失败：${error.message || error}`;
+    }
     if (!$("#settings-dialog").open) $("#settings-dialog").showModal();
   }
 
@@ -500,8 +590,8 @@
       if (event.key === "Escape") api.hideWindow();
     });
 
-    $("#settings-button").addEventListener("click", openSettings);
-    $("#selection-status").addEventListener("click", openSettings);
+    $("#settings-button").addEventListener("click", () => { void openSettings(); });
+    $("#selection-status").addEventListener("click", () => { void openSettings(); });
     $("#close-settings-button").addEventListener("click", () => {
       applyFontScale(state.settings?.appearance?.fontScale);
       $("#settings-dialog").close();
@@ -512,10 +602,24 @@
     });
     $("#google-mode").addEventListener("change", updateGoogleMode);
     $("#font-scale").addEventListener("change", event => applyFontScale(event.target.value));
-    $("#settings-dialog").addEventListener("close", () => applyFontScale(state.settings?.appearance?.fontScale));
+    document.querySelectorAll(".shortcut-input").forEach(bindShortcutRecorder);
+    document.querySelectorAll("[data-clear-shortcut]").forEach(button => {
+      button.addEventListener("click", () => {
+        setShortcutField(button.dataset.clearShortcut, "");
+        $("#settings-status").textContent = "快捷键已清除，保存后生效";
+      });
+    });
+    $("#settings-dialog").addEventListener("close", () => {
+      applyFontScale(state.settings?.appearance?.fontScale);
+      api.resumeShortcuts().catch(error => setRequestStatus(`快捷键恢复失败：${error.message || error}`, "error"));
+    });
     $("#settings-form").addEventListener("submit", async event => {
       event.preventDefault();
       const next = readSettings();
+      if (next.shortcuts.showWindow && next.shortcuts.showWindow.toLowerCase() === next.shortcuts.selectionLookup.toLowerCase()) {
+        $("#settings-status").textContent = "两个功能不能使用同一个快捷键";
+        return;
+      }
       if (next.translation.google.enabled && next.translation.google.mode === "cloud" && !next.translation.google.apiKey) {
         $("#settings-status").textContent = "请填写 Google Cloud Key";
         return;
@@ -534,6 +638,7 @@
         }, 320);
       } catch (error) {
         $("#settings-status").textContent = error.message || String(error);
+        api.suspendShortcuts().catch(() => {});
       }
     });
     $("#quit-button").addEventListener("click", () => api.quit());

@@ -14,10 +14,11 @@ const {
 } = require("electron");
 const { DictionaryManager } = require("./dictionary-manager");
 const { DrugCache } = require("./drug-cache");
+const { registerShortcutConfiguration, validateShortcutConfiguration } = require("./shortcut-manager");
 const { captureSelectionOnce, SelectionMonitor } = require("./selection-monitor");
 const { searchDrug } = require("./services/drugshop");
 const { lookupWord } = require("./services/word-lookup");
-const { SettingsStore } = require("./store");
+const { mergeSettings, SettingsStore } = require("./store");
 
 const TRAY_ICON_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAADOElEQVR4nKWTW2hURxjHv5k5t8Q02YitituKsjQVibWbCNFaNW1ajVqq0s2DLbRSjGAR30QKmraWgtIQqIKoUNs+aN3Qhl7wgtpAbbNSNCYYMBe1Xd1Ns3E3Odk9Z3fPXMvZJuBr8Q/zMA/ff358/AZ1d3droReWv6KUNE0JWYEtBuU6eJMpQkxLKNAVTEfXdTB0Hee9fDWSigbnBX5DD8azazBVY8Fg1TD8jyQSU89LA83DihUsf/h028LA7cbnvojv2d4/du5Yb2zl3I8jAGWANYhGIoZSCj92iD+jpDQgOe6FW+tAv7PxxZhoXKfSzZsUv3hZqa5OdXP9stgxE0KACKi2tdrM69MlKD5q14Gt1OKehoqtbMOr6uGq1cXhcFgMNb0mUqe/ofTqr6r/neZHZwOw+b/BKFEAyC/w7/FRu14rAMgyUlHPqBKUUyIxxl5yFBId7Ti3ZYtYtPOjOWULFv38h/PTQYRaDgHCcOPkLp9G+iXYAgBPFuJccMKFlIwxEJoGNJ+H0W+/JoNfHpXzd7wvV3Wc+XTk1Lof9itZXb/rK+aT6LqusONC1dDk1Pd/q4kJSyKDcs4ZpSA1AoUsBcWGsVkdw2zK4aF3P9/64XctsegKvhwBqGJxQtPYeMJ6bxAyF5akXuc0cGYWNWsyUvKCU9DMhVVQ274BpPMXeKkezZGVPLh+d02DMfdSx46jNYFgsIiJ9ZTwcZq7Mr3XX7q7Ml1pd1nANYmxXHq4UeqzAGgmC5Ij4JkR7Z/z++mzteFnmj5rfdsDmCpt08e5cWKnvvs4TK7+M7ktIVIHl+wL4zkvL8BuMi0kLYBwsyCpBOHmcO7KAUHvnV1cWiJMp671RIkkui1C3rqfP2RXpN9M9wykqyxJeN5lzHUld3JSUipkkRP7Ya6vDAD7BcqXYoakpbNTdK8FrfaD33+51n6u4UHvyPUAKuqmKGKdF/Bs5Zj34+7Ngf7Qj67tBiA+ZjdN20Ue13Ug2mb4gL7OfW2hIyNHQneGPpk/dGtv4Hg0Enq6JFIy9cYTfyZfS5IYs9cojIxys3ySMlaSaSYIGEKiSIg1m4MOQDzH8IRWiRD27g72XfsX+KbNA7ogSOYAAAAASUVORK5CYII=";
 
@@ -32,6 +33,7 @@ let selectionRequestId = 0;
 let isQuitting = false;
 let temporarySelectionTop = false;
 let shortcutCaptureInFlight = false;
+let shortcutsSuspended = false;
 
 function sendToRenderer(channel, value) {
   if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
@@ -216,6 +218,13 @@ async function runShortcutLookup() {
   }
 }
 
+function applyConfiguredShortcuts(settings) {
+  return registerShortcutConfiguration(globalShortcut, settings?.shortcuts, {
+    showWindow: () => showMainWindow(),
+    selectionLookup: () => { void runShortcutLookup(); }
+  });
+}
+
 function registerIpc() {
   ipcMain.handle("app:metadata", () => ({
     name: "Medict",
@@ -227,7 +236,26 @@ function registerIpc() {
 
   ipcMain.handle("settings:get", () => settingsStore.get());
   ipcMain.handle("settings:save", async (_, value) => {
-    const saved = await settingsStore.save(value);
+    const previous = settingsStore.get();
+    const next = mergeSettings(value);
+    next.shortcuts = validateShortcutConfiguration(next.shortcuts);
+    const keepSuspended = shortcutsSuspended;
+    let saved;
+    try {
+      applyConfiguredShortcuts(next);
+      if (keepSuspended) globalShortcut.unregisterAll();
+      saved = await settingsStore.save(next);
+    } catch (error) {
+      globalShortcut.unregisterAll();
+      if (!keepSuspended) {
+        try {
+          applyConfiguredShortcuts(previous);
+        } catch (restoreError) {
+          console.warn("Medict shortcuts could not be restored:", restoreError.message);
+        }
+      }
+      throw error;
+    }
     if (mainWindow && !mainWindow.isDestroyed()) {
       temporarySelectionTop = false;
       mainWindow.setAlwaysOnTop(Boolean(saved.window?.alwaysOnTop), "floating");
@@ -256,6 +284,15 @@ function registerIpc() {
   ipcMain.handle("lookup:drug", (_, query) => runDrugLookup(query));
   ipcMain.handle("lookup:selection", (_, query) => runSelectionLookup(query));
   ipcMain.handle("selection:status", () => selectionStatus);
+  ipcMain.handle("shortcuts:suspend", () => {
+    shortcutsSuspended = true;
+    globalShortcut.unregisterAll();
+    return true;
+  });
+  ipcMain.handle("shortcuts:resume", () => {
+    shortcutsSuspended = false;
+    return applyConfiguredShortcuts(settingsStore.get());
+  });
   ipcMain.handle("drug-cache:stats", () => drugCache?.stats() || { count: 0, ttlMs: 7 * 24 * 60 * 60 * 1000 });
   ipcMain.handle("clipboard:write-text", (_, value) => {
     const text = String(value || "").slice(0, 250000);
@@ -386,7 +423,11 @@ async function bootstrap() {
   createWindow();
   createTray();
 
-  globalShortcut.register("CommandOrControl+Alt+D", () => { void runShortcutLookup(); });
+  try {
+    applyConfiguredShortcuts(settingsStore.get());
+  } catch (error) {
+    console.warn("Medict global shortcuts could not be registered:", error.message);
+  }
   app.on("second-instance", () => showMainWindow());
   app.on("activate", () => {
     if (!mainWindow) createWindow();

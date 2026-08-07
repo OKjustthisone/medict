@@ -5,6 +5,7 @@ const path = require("node:path");
 const test = require("node:test");
 const { DictionaryManager, normalizeEntry, parseCsv } = require("../src/main/dictionary-manager");
 const { DrugCache, normalizeDrugCacheKey, SEVEN_DAYS_MS } = require("../src/main/drug-cache");
+const { normalizeAccelerator, registerShortcutConfiguration, validateShortcutConfiguration } = require("../src/main/shortcut-manager");
 const { normalizeFreeDictionary, normalizeMerriamItem } = require("../src/main/services/dictionary-api");
 const { chooseChemblCandidate, hasDrugIdentity } = require("../src/main/services/drugshop");
 const { parseSelectionLine } = require("../src/main/selection-monitor");
@@ -247,6 +248,8 @@ test("defaults to automatic selection and Google web fallback without storing a 
   const settings = mergeSettings({});
   assert.equal(settings.behavior.selectionLookup, true);
   assert.equal(settings.appearance.fontScale, 115);
+  assert.equal(settings.shortcuts.showWindow, "CommandOrControl+Alt+M");
+  assert.equal(settings.shortcuts.selectionLookup, "CommandOrControl+Alt+D");
   assert.equal(settings.translation.google.enabled, true);
   assert.equal(settings.translation.google.mode, "web");
   assert.equal(settings.translation.google.apiKey, "");
@@ -254,6 +257,40 @@ test("defaults to automatic selection and Google web fallback without storing a 
 
 test("preserves a configured result font scale", () => {
   assert.equal(mergeSettings({ appearance: { fontScale: 145 } }).appearance.fontScale, 145);
+});
+
+test("normalizes configurable global shortcuts and rejects conflicts", () => {
+  assert.equal(normalizeAccelerator("ctrl + alt + m"), "CommandOrControl+Alt+M");
+  assert.equal(normalizeAccelerator("Alt+Shift+F8"), "Alt+Shift+F8");
+  assert.deepEqual(validateShortcutConfiguration({ showWindow: "", selectionLookup: "Ctrl+Alt+D" }), {
+    showWindow: "",
+    selectionLookup: "CommandOrControl+Alt+D"
+  });
+  assert.throws(() => validateShortcutConfiguration({ showWindow: "Ctrl+Alt+D", selectionLookup: "CommandOrControl+Alt+D" }), /不能使用同一个快捷键/);
+  assert.throws(() => normalizeAccelerator("M"), /必须包含 Ctrl 或 Alt/);
+});
+
+test("registers the panel and selection shortcuts together", () => {
+  const registered = [];
+  let unregisterCalls = 0;
+  const registry = {
+    unregisterAll: () => { unregisterCalls += 1; },
+    register: (accelerator, handler) => {
+      registered.push({ accelerator, handler });
+      return true;
+    }
+  };
+  const handlers = { showWindow: () => {}, selectionLookup: () => {} };
+  const shortcuts = registerShortcutConfiguration(registry, {
+    showWindow: "Ctrl+Alt+M",
+    selectionLookup: "Ctrl+Alt+D"
+  }, handlers);
+  assert.deepEqual(shortcuts, {
+    showWindow: "CommandOrControl+Alt+M",
+    selectionLookup: "CommandOrControl+Alt+D"
+  });
+  assert.deepEqual(registered.map(item => item.accelerator), ["CommandOrControl+Alt+M", "CommandOrControl+Alt+D"]);
+  assert.equal(unregisterCalls, 1);
 });
 
 test("does not classify a phrase as a drug from trial or PubChem text alone", () => {
