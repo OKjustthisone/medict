@@ -8,7 +8,8 @@
     requestId: 0,
     activeSelectionRequestId: null,
     selectionStatus: { available: false, active: false, message: "正在启动自动划词" },
-    pinned: false
+    pinned: false,
+    activeMode: "word"
   };
 
   const $ = selector => document.querySelector(selector);
@@ -35,6 +36,68 @@
   function setBusy(busy) {
     $("#word-button").disabled = busy;
     $("#drug-button").disabled = busy;
+  }
+
+  function setActiveMode(mode = "word") {
+    state.activeMode = mode;
+    $("#word-button").classList.toggle("active", mode === "word" || mode === "selection");
+    $("#drug-button").classList.toggle("active", mode === "drug" || mode === "selection");
+  }
+
+  function applyFontScale(value) {
+    const scale = Math.max(100, Math.min(145, Number(value) || 115));
+    const ratio = scale / 100;
+    const root = document.documentElement;
+    root.style.setProperty("--font-scale", String(ratio));
+    [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20].forEach(size => {
+      root.style.setProperty(`--font-${size}`, `${(size * ratio).toFixed(2)}px`);
+    });
+  }
+
+  function copyButton(scope, label = "复制") {
+    return `<button class="copy-button" type="button" data-copy-scope="${esc(scope)}" title="${esc(label)}" aria-label="${esc(label)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7V4h11v13h-3v3H5V7h3Zm2 0h6v8h1V6h-7v1Zm-3 2v9h7V9H7Z"/></svg></button>`;
+  }
+
+  function readableText(element) {
+    if (!element) return "";
+    const clone = element.cloneNode(true);
+    clone.querySelectorAll(".copy-button, .sense-number").forEach(item => item.remove());
+    return clean(clone.innerText).replace(/\n{3,}/g, "\n\n");
+  }
+
+  async function copyFromButton(button) {
+    const scope = button.dataset.copyScope;
+    let text = "";
+    if (scope === "input") text = $("#query-input").value;
+    if (scope === "result") text = readableText(button.closest(".result-block"));
+    if (scope === "sense") text = readableText(button.closest(".sense"));
+    if (scope === "cloud") text = readableText(button.closest(".cloud-result"));
+    if (!clean(text)) {
+      setRequestStatus("没有可复制的内容", "error");
+      return;
+    }
+    try {
+      await api.copyText(text);
+      button.classList.add("copied");
+      setRequestStatus("已复制");
+      setTimeout(() => button.classList.remove("copied"), 900);
+    } catch (error) {
+      setRequestStatus(`复制失败：${error.message || error}`, "error");
+    }
+  }
+
+  function addResultCopyButtons() {
+    document.querySelectorAll(".result-block-heading").forEach(heading => {
+      if (heading.querySelector('[data-copy-scope="result"]')) return;
+      let actions = heading.querySelector(".result-heading-actions");
+      if (!actions) {
+        actions = document.createElement("div");
+        actions.className = "result-heading-actions";
+        [...heading.children].slice(1).forEach(item => actions.appendChild(item));
+        heading.appendChild(actions);
+      }
+      actions.insertAdjacentHTML("beforeend", copyButton("result", "复制本条结果"));
+    });
   }
 
   function renderIdle() {
@@ -108,10 +171,13 @@
     return `<div class="sense-related"><span>${esc(label)}</span>${rows.map(item => `<em>${esc(item)}</em>`).join("")}</div>`;
   }
 
-  function renderSense(sense, index) {
+  function renderSense(sense, index, providerName = "") {
     const translations = values(sense.translations).map(clean).filter(Boolean);
     const examples = values(sense.examples).map(clean).filter(Boolean);
-    return `<div class="sense"><span class="sense-number">${index + 1}</span><div class="sense-copy">${translations.length ? `<div class="sense-translation">${translations.map(esc).join("；")}</div>` : ""}<div class="definition">${esc(sense.definition || "暂无英文释义")}</div>${examples.length ? `<div class="example">${examples.map(example => `<div><span>例</span>${esc(example)}</div>`).join("")}</div>` : ""}${renderRelated("近义", sense.synonyms)}${renderRelated("反义", sense.antonyms)}</div></div>`;
+    const attribution = translations.length && providerName
+      ? `<span class="provider-attribution">${esc(providerName)}</span>`
+      : "";
+    return `<div class="sense"><span class="sense-number">${index + 1}</span><div class="sense-copy">${translations.length ? `<div class="sense-translation">${translations.map(esc).join("；")}</div>` : ""}<div class="definition">${esc(sense.definition || "暂无英文释义")}</div>${examples.length ? `<div class="example">${examples.map(example => `<div><span>例</span>${esc(example)}</div>`).join("")}</div>` : ""}${renderRelated("近义", sense.synonyms)}${renderRelated("反义", sense.antonyms)}<div class="sense-footer">${attribution}${copyButton("sense", "复制本条释义")}</div></div></div>`;
   }
 
   function renderDictionaryEntry(entry) {
@@ -124,28 +190,24 @@
     const source = sourceUrl
       ? `<a href="#" data-external-url="${esc(sourceUrl)}">${esc(sourceName)}</a>`
       : esc(sourceName);
-    const translator = entry.translationProvider?.name
-      ? `<span>中文释义：${esc(entry.translationProvider.name)}</span>`
-      : "";
     const sourceMeta = entry.source
-      ? `<div class="dictionary-source-row"><span>${source}${entry.source.license ? ` · ${esc(entry.source.license)}` : ""}</span>${translator}</div>`
+      ? `<div class="dictionary-source-row"><span>${source}${entry.source.license ? ` · ${esc(entry.source.license)}` : ""}</span></div>`
       : "";
-    return `<div class="dictionary-entry result-body"><div class="word-head"><strong>${esc(entry.word)}</strong>${entry.phonetic ? `<span class="phonetic">${esc(entry.phonetic)}</span>` : ""}${audio}</div>${groups.map(group => `<section class="meaning-group"><div class="meaning-heading"><strong>${esc(partOfSpeechLabel(group.partOfSpeech))}</strong><span>${group.senses.length} 个义项</span></div>${group.senses.map(renderSense).join("")}</section>`).join("")}${sourceMeta}</div>`;
+    const providerName = entry.translationProvider?.name || "";
+    return `<div class="dictionary-entry result-body"><div class="word-head"><strong>${esc(entry.word)}</strong>${entry.phonetic ? `<span class="phonetic">${esc(entry.phonetic)}</span>` : ""}${audio}</div><div class="detail-heading">详细释义</div>${groups.map(group => `<section class="meaning-group"><div class="meaning-heading"><strong>${esc(partOfSpeechLabel(group.partOfSpeech))}</strong><span>${group.senses.length} 个义项</span></div>${group.senses.map((sense, index) => renderSense(sense, index, providerName)).join("")}</section>`).join("")}${sourceMeta}</div>`;
   }
 
   function renderCloudResult(result) {
     const translations = values(result.translations).map(esc).join("<br>") || "服务没有返回译文";
-    const sourceUrl = result.source?.url;
-    const provider = sourceUrl
-      ? `<a href="#" data-external-url="${esc(sourceUrl)}">${esc(result.name || result.provider || "云端服务")}</a>`
-      : esc(result.name || result.provider || "云端服务");
-    return `<div class="cloud-result"><div class="cloud-provider"><span>${provider}</span><span>${result.detectedSource ? `${esc(result.detectedSource)} → ` : ""}${esc(state.settings?.translation?.target || "zh-CN")}</span></div><div class="cloud-translation">${translations}</div>${result.mode === "web" ? '<div class="cloud-meta">Google 免密钥兼容模式</div>' : ""}</div>`;
+    const provider = esc(result.name || result.provider || "云端服务");
+    const language = `${result.detectedSource ? `${esc(result.detectedSource)} → ` : ""}${esc(state.settings?.translation?.target || "zh-CN")}`;
+    return `<div class="cloud-result"><div class="cloud-translation">${translations}</div><div class="cloud-result-footer"><span>${language}</span><span class="provider-attribution">${provider}${result.mode === "web" ? " · 兼容模式" : ""}</span>${copyButton("cloud", "复制本条直接释义")}</div></div>`;
   }
 
-  function renderCloudReference(results) {
+  function renderCloudReference(results, dictionaryMode = false) {
     const rows = values(results);
     if (!rows.length) return "";
-    return `<div class="whole-word-translation"><div class="whole-word-heading"><strong>整词翻译</strong><span>仅供快速参考，完整含义以上方词典义项为准</span></div>${rows.map(renderCloudResult).join("")}</div>`;
+    return `<div class="whole-word-translation${dictionaryMode ? " quick-meaning" : ""}"><div class="whole-word-heading"><strong>${dictionaryMode ? "直接释义" : "翻译结果"}</strong><span>${dictionaryMode ? "先看核心意思，再看下方详细释义" : ""}</span></div>${rows.map(renderCloudResult).join("")}</div>`;
   }
 
   function renderSuggestions(suggestions) {
@@ -166,7 +228,7 @@
     if (result.strategy === "local" && result.localResults?.length) {
       content = result.localResults.map(renderDictionaryEntry).join("");
     } else if (result.dictionaryResults?.length) {
-      content = `${result.dictionaryResults.map(renderDictionaryEntry).join("")}${renderCloudReference(result.cloudResults)}${renderSuggestions(result.suggestions)}`;
+      content = `${renderCloudReference(result.cloudResults, true)}${result.dictionaryResults.map(renderDictionaryEntry).join("")}${renderSuggestions(result.suggestions)}`;
     } else if (result.cloudResults?.length) {
       content = `<div class="result-body">${renderCloudReference(result.cloudResults)}${renderSuggestions(result.suggestions)}</div>`;
     } else {
@@ -182,6 +244,10 @@
     if (phase >= 4) return "已上市 / Phase 4";
     if (phase > 0) return `Phase ${phase}`;
     return "临床前";
+  }
+
+  function cacheBadge(result) {
+    return result?.cache?.hit ? '<span class="cache-chip">7 天缓存</span>' : "";
   }
 
   function identifier(label, value, url) {
@@ -224,7 +290,7 @@
     }
     if (!result) return loadingBlock("DRUG", query);
     if (!result.success) {
-      return `<section class="result-block"><div class="result-block-heading"><div class="heading-title"><span class="heading-label">DRUG</span><h2>${esc(query)}</h2></div><span class="source-badge">未命中</span></div><div class="not-found"><span class="not-found-mark">Rx</span><strong>未找到该药物</strong><p>已查询 DrugShop 的 RxNorm、ChEMBL、PubChem、FDA 与 ClinicalTrials.gov 数据链路。</p></div></section>`;
+      return `<section class="result-block"><div class="result-block-heading"><div class="heading-title"><span class="heading-label">DRUG</span><h2>${esc(query)}</h2></div><span class="source-badge">未命中</span>${cacheBadge(result)}</div><div class="not-found"><span class="not-found-mark">Rx</span><strong>未找到该药物</strong><p>已查询 DrugShop 的 RxNorm、ChEMBL、PubChem、FDA 与 ClinicalTrials.gov 数据链路。</p></div></section>`;
     }
 
     const ids = result.identifiers || {};
@@ -244,7 +310,7 @@
       identifier("CID", ids.pubchemCid, result.sources?.pubchem)
     ].filter(Boolean).join("");
 
-    const summary = `<div class="drug-summary"><div class="drug-name-row"><div><h3>${esc(result.name || query)}</h3><div class="drug-query">查询词：${esc(query)}</div></div><div class="id-row">${idRows}</div></div><div class="fact-grid">${fact("通用名", names.generic)}${fact("商品名", names.brands)}${fact("分子式", structure.formula)}${fact("分子量", structure.molecularWeight)}${fact("分子类型", result.format?.description)}${fact("最高开发阶段", phaseLabel(result.development?.maxPhase))}</div></div>`;
+    const summary = `<div class="drug-summary"><div class="drug-name-row"><div><h3>${esc(result.name || query)}</h3><div class="drug-query">查询词：${esc(query)}${result.cache?.hit ? " · 读取自本机 7 天缓存" : ""}</div></div><div class="id-row">${idRows}</div></div><div class="fact-grid">${fact("通用名", names.generic)}${fact("商品名", names.brands)}${fact("分子式", structure.formula)}${fact("分子量", structure.molecularWeight)}${fact("分子类型", result.format?.description)}${fact("最高开发阶段", phaseLabel(result.development?.maxPhase))}</div></div>`;
 
     const identity = `<div class="subheading">通用名</div>${tags(names.generic)}<div class="subheading">商品名</div>${tags(names.brands)}<div class="subheading">别名 / 研发编号</div>${tags(names.aliases)}<div class="subheading">处方信息</div><p class="detail-text">剂型：${esc(valueOrDash(prescription.rxtermsDoseForm))}<br>给药途径：${esc(valueOrDash(prescription.route))}<br>规格：${esc(valueOrDash(prescription.strength))}</p>${structure.iupac ? `<div class="subheading">IUPAC</div><p class="detail-text">${esc(structure.iupac)}</p>` : ""}${structure.smiles ? `<div class="subheading">SMILES</div><p class="detail-text">${esc(structure.smiles)}</p>` : ""}`;
 
@@ -290,7 +356,7 @@
     const sourceRows = Object.entries(result.sources || {}).filter(([, url]) => url).map(([name, url]) => `<a href="#" data-external-url="${esc(url)}">${esc(name)} ↗</a>`).join("");
     const sources = sourceRows ? detailSection("原始数据源", Object.values(result.sources || {}).filter(Boolean).length, `<div class="source-links">${sourceRows}</div>`) : "";
 
-    return `<section class="result-block"><div class="result-block-heading"><div class="heading-title"><span class="heading-label">DRUG</span><h2>${esc(result.name || query)}</h2></div><span class="phase-chip">${esc(phaseLabel(result.development?.maxPhase))}</span></div>${summary}${detailSection("名称、结构与处方", null, identity)}${detailSection("靶点与作用机制", mechanisms.length, mechanismBody)}${detailSection("分类与适应症", indications.length, indicationBody)}${detailSection("FDA 批准记录", approvals.length, approvalBody)}${detailSection("临床试验", trials.length, trialBody)}${detailSection("药理活性", activities.length, activityBody)}${sources}${warningDetails(result.warnings)}</section>`;
+    return `<section class="result-block"><div class="result-block-heading"><div class="heading-title"><span class="heading-label">DRUG</span><h2>${esc(result.name || query)}</h2></div><span class="phase-chip">${esc(phaseLabel(result.development?.maxPhase))}</span>${cacheBadge(result)}</div>${summary}${detailSection("名称、结构与处方", null, identity)}${detailSection("靶点与作用机制", mechanisms.length, mechanismBody)}${detailSection("分类与适应症", indications.length, indicationBody)}${detailSection("FDA 批准记录", approvals.length, approvalBody)}${detailSection("临床试验", trials.length, trialBody)}${detailSection("药理活性", activities.length, activityBody)}${sources}${warningDetails(result.warnings)}</section>`;
   }
 
   function renderResults({ word = undefined, drug = undefined, errors = {} }) {
@@ -298,6 +364,7 @@
     if (word !== undefined) blocks.push(renderWord(word, errors.word));
     if (drug !== undefined) blocks.push(renderDrug(drug, errors.drug));
     $("#results").innerHTML = `<div class="result-stack">${blocks.join("")}</div>`;
+    addResultCopyButtons();
     $("#results").scrollTop = 0;
   }
 
@@ -310,6 +377,7 @@
     }
     const requestId = ++state.requestId;
     state.activeSelectionRequestId = null;
+    setActiveMode(kind);
     setBusy(true);
     setRequestStatus(kind === "drug" ? "正在查询 DrugShop…" : "正在查询词典与翻译…");
     showLoading(kind, query);
@@ -318,7 +386,7 @@
       if (requestId !== state.requestId) return;
       renderResults(kind === "drug" ? { drug: result } : { word: result });
       setRequestStatus(kind === "drug"
-        ? (result.success ? "药物数据已返回" : "未找到该药物")
+        ? (result.cache?.hit ? "药物结果来自 7 天缓存" : result.success ? "药物数据已返回并缓存" : "未找到该药物，结果已缓存")
         : (result.strategy === "local"
           ? "本地词典命中"
           : result.dictionaryResults?.length
@@ -375,6 +443,7 @@
     setField("youdao-app-key", translation.youdao?.appKey || "");
     setField("youdao-app-secret", translation.youdao?.appSecret || "");
     setField("translation-target", translation.target || "zh-CN");
+    setField("font-scale", settings.appearance?.fontScale || 115);
     setChecked("hide-on-close", settings.window?.hideOnClose !== false);
     $("#settings-status").textContent = "";
     renderDictionarySources();
@@ -387,6 +456,7 @@
     settings.translation.google ||= {};
     settings.translation.youdao ||= {};
     settings.behavior ||= {};
+    settings.appearance ||= {};
     settings.window ||= {};
     settings.translation.source = "auto";
     settings.translation.target = $("#translation-target").value || "zh-CN";
@@ -398,6 +468,7 @@
     settings.translation.youdao.appSecret = clean($("#youdao-app-secret").value);
     settings.behavior.selectionLookup = $("#selection-enabled").checked;
     settings.behavior.selectionMaxLength = Number(settings.behavior.selectionMaxLength) || 500;
+    settings.appearance.fontScale = Math.max(100, Math.min(145, Number($("#font-scale").value) || 115));
     settings.window.hideOnClose = $("#hide-on-close").checked;
     settings.window.alwaysOnTop = state.pinned;
     return settings;
@@ -414,6 +485,7 @@
     $("#clear-button").addEventListener("click", () => {
       state.requestId += 1;
       state.activeSelectionRequestId = null;
+      setActiveMode("word");
       setBusy(false);
       $("#query-input").value = "";
       setRequestStatus("");
@@ -430,9 +502,17 @@
 
     $("#settings-button").addEventListener("click", openSettings);
     $("#selection-status").addEventListener("click", openSettings);
-    $("#close-settings-button").addEventListener("click", () => $("#settings-dialog").close());
-    $("#cancel-settings-button").addEventListener("click", () => $("#settings-dialog").close());
+    $("#close-settings-button").addEventListener("click", () => {
+      applyFontScale(state.settings?.appearance?.fontScale);
+      $("#settings-dialog").close();
+    });
+    $("#cancel-settings-button").addEventListener("click", () => {
+      applyFontScale(state.settings?.appearance?.fontScale);
+      $("#settings-dialog").close();
+    });
     $("#google-mode").addEventListener("change", updateGoogleMode);
+    $("#font-scale").addEventListener("change", event => applyFontScale(event.target.value));
+    $("#settings-dialog").addEventListener("close", () => applyFontScale(state.settings?.appearance?.fontScale));
     $("#settings-form").addEventListener("submit", async event => {
       event.preventDefault();
       const next = readSettings();
@@ -447,6 +527,7 @@
       $("#settings-status").textContent = "保存中…";
       try {
         state.settings = await api.saveSettings(next);
+        applyFontScale(state.settings.appearance?.fontScale);
         $("#settings-status").textContent = "已保存";
         setTimeout(() => {
           if ($("#settings-dialog").open) $("#settings-dialog").close();
@@ -466,6 +547,13 @@
     });
 
     document.addEventListener("click", event => {
+      const copyControl = event.target.closest("[data-copy-scope]");
+      if (copyControl) {
+        event.preventDefault();
+        event.stopPropagation();
+        void copyFromButton(copyControl);
+        return;
+      }
       const audioButton = event.target.closest("[data-audio-url]");
       if (audioButton) {
         const audio = new Audio(audioButton.dataset.audioUrl);
@@ -488,6 +576,7 @@
     api.onSelectionPending(payload => {
       state.requestId += 1;
       state.activeSelectionRequestId = payload.requestId;
+      setActiveMode("selection");
       $("#query-input").value = payload.query;
       setBusy(false);
       setRequestStatus("划词：查词与药物查询并行执行中…");
@@ -497,6 +586,13 @@
       if (state.activeSelectionRequestId !== payload.requestId) return;
       renderResults({ word: payload.word, drug: payload.drug, errors: payload.errors || {} });
       setRequestStatus(payload.drug?.success ? "划词查询完成 · 已匹配药物" : "划词查询完成 · 未找到该药物");
+    });
+    api.onSelectionEmpty(payload => {
+      state.activeSelectionRequestId = null;
+      setActiveMode("word");
+      setBusy(false);
+      setRequestStatus(payload?.message || "未读取到选中文本", "error");
+      $("#query-input").focus();
     });
     api.onSelectionStatus(updateSelectionStatus);
   }
@@ -517,6 +613,8 @@
       state.settings = settings;
       state.sources = sources;
       state.pinned = pinned;
+      applyFontScale(settings.appearance?.fontScale);
+      setActiveMode("word");
       $("#pin-button").classList.toggle("active", pinned);
       updateSelectionStatus(selectionStatus);
       renderIdle();

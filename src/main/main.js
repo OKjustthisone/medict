@@ -2,6 +2,7 @@ const path = require("node:path");
 const {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   globalShortcut,
   ipcMain,
@@ -12,7 +13,8 @@ const {
   Tray
 } = require("electron");
 const { DictionaryManager } = require("./dictionary-manager");
-const { SelectionMonitor } = require("./selection-monitor");
+const { DrugCache } = require("./drug-cache");
+const { captureSelectionOnce, SelectionMonitor } = require("./selection-monitor");
 const { searchDrug } = require("./services/drugshop");
 const { lookupWord } = require("./services/word-lookup");
 const { SettingsStore } = require("./store");
@@ -22,12 +24,14 @@ const TRAY_ICON_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAADOElEQV
 let mainWindow = null;
 let tray = null;
 let dictionaryManager = null;
+let drugCache = null;
 let settingsStore = null;
 let selectionMonitor = null;
 let selectionStatus = { available: false, active: false, message: "自动划词尚未启动" };
 let selectionRequestId = 0;
 let isQuitting = false;
 let temporarySelectionTop = false;
+let shortcutCaptureInFlight = false;
 
 function sendToRenderer(channel, value) {
   if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
@@ -51,7 +55,7 @@ function restoreConfiguredWindowTop() {
   mainWindow.setAlwaysOnTop(Boolean(settingsStore?.get().window?.alwaysOnTop), "floating");
 }
 
-function showNearCursor() {
+function showNearCursor({ focus = false } = {}) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const point = screen.getCursorScreenPoint();
   const display = screen.getDisplayNearestPoint(point);
@@ -69,7 +73,12 @@ function showNearCursor() {
     temporarySelectionTop = true;
     mainWindow.setAlwaysOnTop(true, "pop-up-menu");
   }
-  mainWindow.showInactive();
+  if (focus) {
+    mainWindow.show();
+    mainWindow.focus();
+  } else {
+    mainWindow.showInactive();
+  }
 }
 
 function nativeWindowHandle(window) {
@@ -121,19 +130,56 @@ async function runWordLookup(query) {
   });
 }
 
-async function runSelectionLookup(rawText) {
+async function runDrugLookup(query) {
+  let cached = null;
+  try {
+    cached = await drugCache?.get(query);
+  } catch (error) {
+    console.warn("Medict drug cache could not be read:", error.message);
+  }
+  if (cached) {
+    return {
+      ...cached.result,
+      cache: {
+        hit: true,
+        cachedAt: cached.cachedAt,
+        expiresAt: cached.expiresAt,
+        ttlDays: 7
+      }
+    };
+  }
+
+  const result = await searchDrug(query);
+  try {
+    const saved = await drugCache?.set(query, result);
+    return {
+      ...result,
+      cache: {
+        hit: false,
+        cachedAt: saved?.cachedAt || Date.now(),
+        expiresAt: saved?.expiresAt || Date.now() + (7 * 24 * 60 * 60 * 1000),
+        ttlDays: 7
+      }
+    };
+  } catch (error) {
+    console.warn("Medict drug cache could not be updated:", error.message);
+    return result;
+  }
+}
+
+async function runSelectionLookup(rawText, options = {}) {
   const settings = settingsStore.get();
-  if (!settings.behavior?.selectionLookup) return;
+  if (!options.force && !settings.behavior?.selectionLookup) return;
   const limit = Math.max(20, Math.min(Number(settings.behavior.selectionMaxLength) || 500, 4000));
   const query = String(rawText || "").trim().slice(0, limit);
   if (!query) return;
 
   const requestId = ++selectionRequestId;
-  showNearCursor();
+  showNearCursor({ focus: Boolean(options.focus) });
   sendToRenderer("selection:pending", { query, requestId });
   const [wordResult, drugResult] = await Promise.allSettled([
     runWordLookup(query),
-    searchDrug(query)
+    runDrugLookup(query)
   ]);
   if (requestId !== selectionRequestId) return;
   sendToRenderer("selection:result", {
@@ -146,6 +192,28 @@ async function runSelectionLookup(rawText) {
       drug: drugResult.status === "rejected" ? String(drugResult.reason?.message || drugResult.reason) : ""
     }
   });
+}
+
+async function runShortcutLookup() {
+  if (shortcutCaptureInFlight || !mainWindow || mainWindow.isDestroyed()) return;
+  shortcutCaptureInFlight = true;
+  try {
+    const selected = await captureSelectionOnce(selectionHelperPath(), {
+      windowHandle: nativeWindowHandle(mainWindow),
+      timeout: 3200
+    });
+    if (selected) {
+      await runSelectionLookup(selected, { force: true, focus: true });
+      return;
+    }
+    showMainWindow();
+    sendToRenderer("selection:empty", { message: "未读取到选中文本，请重新选择后按 Ctrl + Alt + D" });
+  } catch (error) {
+    showMainWindow();
+    sendToRenderer("selection:empty", { message: `快捷键取词失败：${error.message || error}` });
+  } finally {
+    shortcutCaptureInFlight = false;
+  }
 }
 
 function registerIpc() {
@@ -185,9 +253,16 @@ function registerIpc() {
   });
 
   ipcMain.handle("lookup:word", (_, query) => runWordLookup(query));
-  ipcMain.handle("lookup:drug", (_, query) => searchDrug(query));
+  ipcMain.handle("lookup:drug", (_, query) => runDrugLookup(query));
   ipcMain.handle("lookup:selection", (_, query) => runSelectionLookup(query));
   ipcMain.handle("selection:status", () => selectionStatus);
+  ipcMain.handle("drug-cache:stats", () => drugCache?.stats() || { count: 0, ttlMs: 7 * 24 * 60 * 60 * 1000 });
+  ipcMain.handle("clipboard:write-text", (_, value) => {
+    const text = String(value || "").slice(0, 250000);
+    if (!text.trim()) throw new Error("没有可复制的内容");
+    clipboard.writeText(text);
+    return true;
+  });
 
   ipcMain.handle("window:minimize", () => mainWindow?.minimize());
   ipcMain.handle("window:hide", () => {
@@ -300,6 +375,8 @@ async function bootstrap() {
   const userData = app.getPath("userData");
   settingsStore = new SettingsStore(path.join(userData, "settings.json"));
   await settingsStore.load();
+  drugCache = new DrugCache(path.join(userData, "drug-cache.json"));
+  await drugCache.load();
   dictionaryManager = new DictionaryManager({
     builtinPath: null,
     userDictionaryDir: path.join(userData, "dictionaries")
@@ -309,7 +386,7 @@ async function bootstrap() {
   createWindow();
   createTray();
 
-  globalShortcut.register("CommandOrControl+Alt+D", () => showMainWindow());
+  globalShortcut.register("CommandOrControl+Alt+D", () => { void runShortcutLookup(); });
   app.on("second-instance", () => showMainWindow());
   app.on("activate", () => {
     if (!mainWindow) createWindow();

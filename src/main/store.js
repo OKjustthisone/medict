@@ -32,6 +32,9 @@ const DEFAULT_SETTINGS = {
     selectionLookup: true,
     selectionMaxLength: 500
   },
+  appearance: {
+    fontScale: 115
+  },
   window: {
     alwaysOnTop: false,
     hideOnClose: true
@@ -74,6 +77,10 @@ function mergeSettings(value) {
     behavior: {
       ...clone(DEFAULT_SETTINGS.behavior),
       ...(source.behavior || {})
+    },
+    appearance: {
+      ...clone(DEFAULT_SETTINGS.appearance),
+      ...(source.appearance || {})
     },
     window: {
       ...clone(DEFAULT_SETTINGS.window),

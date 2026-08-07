@@ -5,6 +5,7 @@ const { spawn } = require("node:child_process");
 function parseSelectionLine(line) {
   const value = String(line || "").trim();
   if (value === "READY") return { type: "ready" };
+  if (value === "EMPTY") return { type: "empty" };
   if (value.startsWith("ERROR\t")) return { type: "error", message: value.slice(6).trim() };
   if (!value.startsWith("TEXT\t")) return null;
   try {
@@ -13,6 +14,49 @@ function parseSelectionLine(line) {
   } catch (_) {
     return null;
   }
+}
+
+function captureSelectionOnce(executablePath, { windowHandle = 0, timeout = 3000 } = {}) {
+  if (process.platform !== "win32") return Promise.resolve("");
+  if (!executablePath || !fs.existsSync(executablePath)) {
+    return Promise.reject(new Error("划词助手未编译"));
+  }
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(executablePath, ["--capture-once", String(windowHandle || 0)], {
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const finish = (error, text = "") => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) reject(error);
+      else resolve(String(text || "").trim());
+    };
+    const timer = setTimeout(() => {
+      if (!child.killed) child.kill();
+      finish(null, "");
+    }, Math.max(500, Number(timeout) || 3000));
+
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", chunk => { stdout += String(chunk || ""); });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", chunk => { stderr += String(chunk || ""); });
+    child.on("error", error => finish(error));
+    child.on("exit", code => {
+      const events = stdout.split(/\r?\n/).map(parseSelectionLine).filter(Boolean);
+      const textEvent = events.find(event => event.type === "text");
+      const errorEvent = events.find(event => event.type === "error");
+      if (textEvent) finish(null, textEvent.text);
+      else if (errorEvent) finish(new Error(errorEvent.message));
+      else if (code && code !== 0) finish(new Error(stderr.trim() || `划词助手异常退出（${code}）`));
+      else finish(null, "");
+    });
+  });
 }
 
 class SelectionMonitor extends EventEmitter {
@@ -81,6 +125,7 @@ class SelectionMonitor extends EventEmitter {
 }
 
 module.exports = {
+  captureSelectionOnce,
   parseSelectionLine,
   SelectionMonitor
 };

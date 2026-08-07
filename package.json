@@ -9,7 +9,7 @@
     "prestart": "npm run build:selection-helper",
     "start": "electron .",
     "test": "node --test tests/core.test.js",
-    "check": "node --check src/main/main.js && node --check src/main/preload.js && node --check src/main/dictionary-manager.js && node --check src/main/selection-monitor.js && node --check src/main/services/dictionary-api.js && node --check src/main/services/translation.js && node --check src/main/services/word-lookup.js && node --check src/main/services/drugshop.js && node --check src/renderer/renderer.js",
+    "check": "node --check src/main/main.js && node --check src/main/preload.js && node --check src/main/dictionary-manager.js && node --check src/main/drug-cache.js && node --check src/main/selection-monitor.js && node --check src/main/services/dictionary-api.js && node --check src/main/services/translation.js && node --check src/main/services/word-lookup.js && node --check src/main/services/drugshop.js && node --check src/renderer/renderer.js",
     "predist": "npm run build:selection-helper",
     "dist": "electron-builder --win"
   },

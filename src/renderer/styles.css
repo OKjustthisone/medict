@@ -13,6 +13,7 @@
   --orange: #c97938;
   --red: #c25252;
   --shadow: 0 12px 34px rgba(27, 30, 35, .11);
+  --font-scale: 1.15;
 }
 
 * { box-sizing: border-box; }
@@ -106,7 +107,7 @@ button:disabled { cursor: wait; opacity: .62; }
   width: 100%;
   height: 100%;
   min-height: 88px;
-  padding: 14px 40px 13px 13px;
+  padding: 14px 70px 13px 13px;
   resize: none;
   overflow: auto;
   border: 0;
@@ -120,9 +121,8 @@ button:disabled { cursor: wait; opacity: .62; }
 
 #query-input::placeholder { color: #a1a3a5; }
 
-.clear-button {
+.query-tool-button, .clear-button {
   position: absolute;
-  right: 9px;
   bottom: 9px;
   display: grid;
   width: 24px;
@@ -133,8 +133,10 @@ button:disabled { cursor: wait; opacity: .62; }
   background: transparent;
 }
 
-.clear-button svg { width: 15px; height: 15px; fill: currentColor; }
-.clear-button:hover { color: #666a70; background: #dededb; }
+.clear-button { right: 9px; }
+.copy-input-button { right: 37px; }
+.query-tool-button svg, .clear-button svg { width: 15px; height: 15px; fill: currentColor; }
+.query-tool-button:hover, .clear-button:hover { color: #666a70; background: #dededb; }
 
 .action-row {
   display: grid;
@@ -157,10 +159,35 @@ button:disabled { cursor: wait; opacity: .62; }
 
 .action-button svg { width: 17px; height: 17px; fill: currentColor; }
 .action-button:active { transform: translateY(1px); }
-.word-button { color: white; background: var(--blue); box-shadow: 0 4px 10px rgba(76, 114, 232, .2); }
-.word-button:hover { background: var(--blue-deep); }
-.drug-button { color: #4a4d51; background: #dededb; }
-.drug-button:hover { background: #d4d4d1; }
+.action-button { color: #4a4d51; background: #dededb; box-shadow: none; }
+.action-button:hover { background: #d4d4d1; }
+.action-button.active { color: white; background: var(--blue); box-shadow: 0 4px 10px rgba(76, 114, 232, .2); }
+.action-button.active:hover { background: var(--blue-deep); }
+
+.result-heading-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.copy-button {
+  display: inline-grid;
+  width: 23px;
+  height: 23px;
+  flex: 0 0 auto;
+  place-items: center;
+  padding: 0;
+  border-radius: 6px;
+  color: #94989e;
+  background: transparent;
+  transition: color .12s ease, background .12s ease;
+}
+
+.copy-button svg { width: 14px; height: 14px; fill: currentColor; }
+.copy-button:hover { color: var(--blue); background: var(--blue-soft); }
+.copy-button.copied { color: white; background: var(--green); }
 
 .status-row {
   display: flex;
@@ -295,7 +322,30 @@ button:disabled { cursor: wait; opacity: .62; }
 .dictionary-source-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 9px; padding-top: 8px; border-top: 1px solid #eeeeec; color: #999da3; font-size: 9px; }
 .dictionary-source-row a { color: #6578a5; }
 
+.detail-heading {
+  margin: 2px 0 3px;
+  color: #7c8188;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.sense-footer {
+  display: flex;
+  min-height: 23px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  margin-top: 5px;
+}
+
+.provider-attribution {
+  color: #92969c;
+  font-size: 9px;
+  text-align: right;
+}
+
 .whole-word-translation { padding: 10px 12px 12px; border-top: 1px solid #eeeeec; background: #fafbfc; }
+.whole-word-translation.quick-meaning { border-top: 0; border-bottom: 1px solid #eeeeec; background: #fbfcff; }
 .whole-word-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 9px; }
 .whole-word-heading strong { color: #50555c; font-size: 11px; }
 .whole-word-heading span { color: #9a9ea4; font-size: 8px; text-align: right; }
@@ -306,6 +356,17 @@ button:disabled { cursor: wait; opacity: .62; }
 .cloud-provider { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; color: #666b72; font-size: 10px; }
 .cloud-translation { color: #292d33; font-size: 17px; line-height: 1.55; user-select: text; }
 .cloud-meta { margin-top: 5px; color: #999ca1; font-size: 9px; }
+.cloud-result-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-height: 23px;
+  margin-top: 5px;
+  color: #a0a3a8;
+  font-size: 9px;
+}
+.cloud-result-footer > :first-child { margin-right: auto; }
 
 .suggestion-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
 .suggestion-button { padding: 4px 7px; border-radius: 6px; color: #5d6e99; background: #f1f3f9; font-size: 10px; }
@@ -365,6 +426,7 @@ button:disabled { cursor: wait; opacity: .62; }
 .id-chip { color: #596f9f; text-decoration: none; }
 .id-chip:hover { background: #e5ebfb; }
 .phase-chip { flex: 0 0 auto; color: #8a5e27; background: #fff1dc; }
+.cache-chip { display: inline-flex; flex: 0 0 auto; align-items: center; padding: 3px 7px; border-radius: 999px; color: #26745f; background: #e8f5ef; font-size: 9px; white-space: nowrap; }
 
 .fact-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 10px; }
 .fact { min-width: 0; padding: 7px 8px; border-radius: 7px; background: #f7f7f5; }
@@ -466,6 +528,33 @@ kbd { padding: 1px 4px; border: 1px solid #d5d6d4; border-bottom-width: 2px; bor
 .text-button { padding: 5px 0; color: #74787e; background: transparent; font-size: 9px; }
 .danger-text:hover { color: var(--red); }
 .settings-save-status { color: var(--green); font-size: 9px; }
+
+/* Text scale is intentionally limited to copy and result content so the compact
+   window keeps its original geometry while definitions remain readable. */
+body { font-size: var(--font-13, 14.95px); }
+#query-input { font-size: var(--font-15, 17.25px); }
+.action-button, .empty-state strong, .section-heading h3 { font-size: var(--font-13, 14.95px); }
+.status-row, .meaning-heading strong, .cloud-provider, .fact-value, .detail-text,
+.record-title, .check-row, .field input, .field select { font-size: var(--font-10, 11.5px); }
+.empty-state p, .notice, .not-found, .warning-details summary, .drug-section summary,
+.whole-word-heading strong, .provider-check { font-size: var(--font-11, 12.65px); }
+.heading-title h2 { font-size: var(--font-14, 16.1px); }
+.heading-label, .source-badge, .count-pill, .id-chip, .phase-chip, .cache-chip,
+.meaning-heading span, .sense-number, .sense-related, .dictionary-source-row,
+.cloud-meta, .cloud-result-footer, .provider-attribution, .drug-query, .tag,
+.subheading, .record-meta, .source-links, .field, .dictionary-source,
+.dictionary-source-empty, .settings-save-status, .subtle-note { font-size: var(--font-9, 10.35px); }
+.word-head strong { font-size: var(--font-20, 23px); }
+.phonetic, .sense-translation, .definition, .notice strong, .not-found strong {
+  font-size: var(--font-12, 13.8px);
+}
+.translation-chip, .example { font-size: var(--font-11, 12.65px); }
+.example span, .fact-label, .provider-help, .eyebrow, kbd, .whole-word-heading span {
+  font-size: var(--font-8, 9.2px);
+}
+.cloud-translation { font-size: var(--font-17, 19.55px); }
+.drug-name-row h3, .dialog-header h2 { font-size: var(--font-18, 20.7px); }
+.detail-heading { font-size: var(--font-10, 11.5px); }
 
 @media (max-width: 380px) {
   .app-shell { border-radius: 7px; }

@@ -14,6 +14,7 @@ internal static class SelectionHelper
     private const int WmLButtonUp = 0x0202;
     private const uint InputKeyboard = 1;
     private const ushort VkControl = 0x11;
+    private const ushort VkMenu = 0x12;
     private const ushort VkC = 0x43;
     private const uint KeyeventfKeyup = 0x0002;
     private const uint GaRoot = 2;
@@ -30,15 +31,24 @@ internal static class SelectionHelper
     [STAThread]
     private static void Main(string[] args)
     {
-        if (args.Length > 0) int.TryParse(args[0], out _parentPid);
-        if (args.Length > 1)
+        bool captureOnce = args.Length > 0 && String.Equals(args[0], "--capture-once", StringComparison.OrdinalIgnoreCase);
+        if (!captureOnce && args.Length > 0) int.TryParse(args[0], out _parentPid);
+        const int windowArgument = 1;
+        if (args.Length > windowArgument)
         {
             long handle;
-            if (long.TryParse(args[1], out handle)) _medictWindow = new IntPtr(handle);
+            if (long.TryParse(args[windowArgument], out handle)) _medictWindow = new IntPtr(handle);
         }
 
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
+
+        if (captureOnce)
+        {
+            WaitForShortcutKeysReleased();
+            if (!CaptureAndPublish()) Publish("EMPTY");
+            return;
+        }
 
         _captureTimer = new System.Windows.Forms.Timer();
         _captureTimer.Interval = 180;
@@ -86,22 +96,38 @@ internal static class SelectionHelper
         return CallNextHookEx(_hook, nCode, wParam, lParam);
     }
 
-    private static void CaptureAndPublish()
+    private static bool CaptureAndPublish()
     {
         IntPtr foreground = GetAncestor(GetForegroundWindow(), GaRoot);
-        if (foreground == IntPtr.Zero || (_medictWindow != IntPtr.Zero && foreground == _medictWindow)) return;
+        if (foreground == IntPtr.Zero || (_medictWindow != IntPtr.Zero && foreground == _medictWindow)) return false;
 
         string selected = TryReadUiAutomationSelection();
         if (String.IsNullOrWhiteSpace(selected)) selected = TryCopySelection();
         selected = NormalizeSelection(selected);
-        if (String.IsNullOrWhiteSpace(selected)) return;
+        if (String.IsNullOrWhiteSpace(selected)) return false;
 
         DateTime now = DateTime.UtcNow;
-        if (selected == _lastText && (now - _lastTextAt).TotalMilliseconds < 900) return;
+        if (selected == _lastText && (now - _lastTextAt).TotalMilliseconds < 900) return false;
         _lastText = selected;
         _lastTextAt = now;
         string payload = Convert.ToBase64String(Encoding.UTF8.GetBytes(selected));
         Publish("TEXT\t" + payload);
+        return true;
+    }
+
+    private static void WaitForShortcutKeysReleased()
+    {
+        for (int attempt = 0; attempt < 40; attempt++)
+        {
+            bool controlDown = (GetAsyncKeyState(VkControl) & 0x8000) != 0;
+            bool altDown = (GetAsyncKeyState(VkMenu) & 0x8000) != 0;
+            if (!controlDown && !altDown)
+            {
+                Thread.Sleep(45);
+                return;
+            }
+            Thread.Sleep(20);
+        }
     }
 
     private static string TryReadUiAutomationSelection()
@@ -282,6 +308,9 @@ internal static class SelectionHelper
 
     [DllImport("user32.dll")]
     private static extern uint GetClipboardSequenceNumber();
+
+    [DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int virtualKey);
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern uint SendInput(uint count, Input[] inputs, int size);

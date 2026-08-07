@@ -4,8 +4,9 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const { DictionaryManager, normalizeEntry, parseCsv } = require("../src/main/dictionary-manager");
+const { DrugCache, normalizeDrugCacheKey, SEVEN_DAYS_MS } = require("../src/main/drug-cache");
 const { normalizeFreeDictionary, normalizeMerriamItem } = require("../src/main/services/dictionary-api");
-const { hasDrugIdentity } = require("../src/main/services/drugshop");
+const { chooseChemblCandidate, hasDrugIdentity } = require("../src/main/services/drugshop");
 const { parseSelectionLine } = require("../src/main/selection-monitor");
 const { lookupWord } = require("../src/main/services/word-lookup");
 const { buildYoudaoPayload } = require("../src/main/services/translation");
@@ -208,12 +209,51 @@ test("decodes UTF-8 selection messages from the Windows helper", () => {
   });
 });
 
+test("recognizes an empty one-shot selection response", () => {
+  assert.deepEqual(parseSelectionLine("EMPTY"), { type: "empty" });
+});
+
+test("persists drug results for seven days and expires them afterwards", async () => {
+  const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "medict-cache-test-"));
+  const cachePath = path.join(tempDirectory, "drug-cache.json");
+  let now = Date.UTC(2026, 7, 8, 0, 0, 0);
+  try {
+    const first = new DrugCache(cachePath, { now: () => now });
+    await first.load();
+    await first.set("  Aspirin  ", { type: "drug", success: true, name: "Aspirin" });
+
+    const sameSession = await first.get("aspirin");
+    assert.equal(sameSession.result.name, "Aspirin");
+    assert.equal(sameSession.expiresAt - sameSession.cachedAt, SEVEN_DAYS_MS);
+
+    const afterRestart = new DrugCache(cachePath, { now: () => now });
+    await afterRestart.load();
+    assert.equal((await afterRestart.get("ASPIRIN")).result.success, true);
+    assert.equal(afterRestart.stats().count, 1);
+
+    now += SEVEN_DAYS_MS + 1;
+    assert.equal(await afterRestart.get("aspirin"), null);
+    assert.equal(afterRestart.stats().count, 0);
+  } finally {
+    await fs.rm(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test("normalizes drug cache keys across whitespace and case", () => {
+  assert.equal(normalizeDrugCacheKey("  Acetyl   Salicylic ACID "), "acetyl salicylic acid");
+});
+
 test("defaults to automatic selection and Google web fallback without storing a key", () => {
   const settings = mergeSettings({});
   assert.equal(settings.behavior.selectionLookup, true);
+  assert.equal(settings.appearance.fontScale, 115);
   assert.equal(settings.translation.google.enabled, true);
   assert.equal(settings.translation.google.mode, "web");
   assert.equal(settings.translation.google.apiKey, "");
+});
+
+test("preserves a configured result font scale", () => {
+  assert.equal(mergeSettings({ appearance: { fontScale: 145 } }).appearance.fontScale, 145);
 });
 
 test("does not classify a phrase as a drug from trial or PubChem text alone", () => {
@@ -221,4 +261,14 @@ test("does not classify a phrase as a drug from trial or PubChem text alone", ()
   assert.equal(hasDrugIdentity({ rxcui: "1191" }, null, []), true);
   assert.equal(hasDrugIdentity({ rxcui: null }, { id: "CHEMBL25" }, []), true);
   assert.equal(hasDrugIdentity({ rxcui: null }, null, [{ applicationNumber: "NDA000001" }]), true);
+});
+
+test("does not accept ChEMBL's first fuzzy candidate for an ordinary word", () => {
+  const candidates = [
+    { molecule_chembl_id: "CHEMBL562965", pref_name: null },
+    { molecule_chembl_id: "CHEMBL999", pref_name: "UNRELATED" }
+  ];
+  assert.equal(chooseChemblCandidate(candidates, "fan"), null);
+  assert.equal(chooseChemblCandidate([{ molecule_chembl_id: "CHEMBL25", pref_name: "ASPIRIN" }], "aspirin").molecule_chembl_id, "CHEMBL25");
+  assert.equal(chooseChemblCandidate([{ molecule_chembl_id: "CHEMBL25", pref_name: "ASPIRIN" }], "chembl25").pref_name, "ASPIRIN");
 });

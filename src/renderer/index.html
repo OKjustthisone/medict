@@ -32,13 +32,16 @@
 
     <section class="query-card" aria-label="查询输入">
       <textarea id="query-input" rows="3" maxlength="4000" spellcheck="false" placeholder="输入单词、文本或药物名…" autofocus></textarea>
+      <button id="copy-input-button" class="query-tool-button copy-input-button" type="button" data-copy-scope="input" title="复制输入内容" aria-label="复制输入内容">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7V4h11v13h-3v3H5V7h3Zm2 0h6v8h1V6h-7v1Zm-3 2v9h7V9H7Z"/></svg>
+      </button>
       <button id="clear-button" class="clear-button" type="button" title="清空" aria-label="清空输入">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10v10H7zM9 9v6h6V9z"/></svg>
       </button>
     </section>
 
     <section class="action-row" aria-label="查询操作">
-      <button id="word-button" class="action-button word-button" type="button">
+      <button id="word-button" class="action-button word-button active" type="button">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h12a2 2 0 0 1 2 2v13H7a2 2 0 0 1-2-2V4Zm3 3v2h8V7H8Zm0 4v2h7v-2H8Zm0 4v2h5v-2H8Z"/></svg>
         <span>查词</span>
       </button>
@@ -78,7 +81,7 @@
             </div>
             <label class="switch"><input id="selection-enabled" type="checkbox"><span></span></label>
           </div>
-          <p class="subtle-note">仅在 Medict 运行时监听；密码输入框会跳过。快捷键 <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>D</kbd> 可随时呼出窗口。</p>
+          <p class="subtle-note">仅在 Medict 运行时监听；密码输入框会跳过。选中文本后按 <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>D</kbd> 会立即取词并查询。</p>
         </section>
 
         <section class="settings-section">
@@ -140,6 +143,24 @@
           </div>
           <div id="dictionary-sources" class="dictionary-sources"></div>
           <p class="subtle-note">后续优先支持 GoldenDict 常用的 StarDict（.ifo/.idx/.dict）、DSL，以及 MDict。词典内容需由用户按授权自行导入。</p>
+        </section>
+
+        <section class="settings-section">
+          <div class="section-heading">
+            <div>
+              <h3>字体大小</h3>
+              <p>同步调整查词、翻译和药物结果的文字大小。</p>
+            </div>
+          </div>
+          <label class="field compact-field">显示字号
+            <select id="font-scale">
+              <option value="100">标准</option>
+              <option value="115">较大（推荐）</option>
+              <option value="130">大</option>
+              <option value="145">特大</option>
+            </select>
+          </label>
+          <p class="subtle-note">药物查询结果会自动保存在本机 7 天，相同查询优先读取缓存。</p>
         </section>
 
         <section class="settings-section compact-settings">

@@ -35,6 +35,15 @@ function hasDrugIdentity(rx, chembl, fda) {
   return Boolean(rx?.rxcui || chembl || (Array.isArray(fda) && fda.length));
 }
 
+function chooseChemblCandidate(candidates, query) {
+  const normalized = clean(query).toLowerCase();
+  if (!normalized) return null;
+  return (Array.isArray(candidates) ? candidates : []).find(item => (
+    clean(item?.pref_name).toLowerCase() === normalized
+    || clean(item?.molecule_chembl_id).toLowerCase() === normalized
+  )) || null;
+}
+
 async function safeJson(url, warnings, label, timeout = 12000) {
   try {
     return await fetchJson(url, {}, timeout);
@@ -95,8 +104,10 @@ async function getRxNav(rxcui, warnings) {
 async function getChembl(query, warnings) {
   const search = await safeJson(`${API.chembl}/molecule/search.json?q=${encodeURIComponent(query)}&limit=8`, warnings, "ChEMBL 搜索", 8000);
   const candidates = search?.molecules || [];
-  const normalized = query.toLowerCase();
-  const molecule = candidates.find(item => item.pref_name?.toLowerCase() === normalized || item.molecule_chembl_id?.toLowerCase() === normalized) || candidates[0];
+  // ChEMBL's search endpoint is fuzzy and may return an unrelated molecule for
+  // an ordinary English word. Only an exact preferred name or ChEMBL ID is
+  // strong enough to establish drug identity; RxNorm/FDA still cover brands.
+  const molecule = chooseChemblCandidate(candidates, query);
   if (!molecule) return null;
   const id = molecule.molecule_chembl_id;
   const [moleculeDetails, mechanisms, indications, activities] = await Promise.all([
@@ -306,6 +317,7 @@ async function searchDrug(query) {
 
 module.exports = {
   API,
+  chooseChemblCandidate,
   getChembl,
   getFda,
   getPubChem,
