@@ -30,6 +30,12 @@
     "directories": {
       "output": "release"
     },
+    "electronLanguages": [
+      "en-US",
+      "zh-CN"
+    ],
+    "compression": "maximum",
+    "removePackageScripts": true,
     "extraResources": [
       {
         "from": "build/SelectionHelper.exe",

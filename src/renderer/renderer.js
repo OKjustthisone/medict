@@ -274,9 +274,41 @@
   function groupSenses(senses) {
     const groups = new Map();
     values(senses).forEach(sense => {
-      const key = clean(sense.partOfSpeech).toLowerCase() || "other";
-      if (!groups.has(key)) groups.set(key, { partOfSpeech: sense.partOfSpeech, senses: [] });
-      groups.get(key).senses.push(sense);
+      if (!sense || typeof sense !== "object") return;
+      const partOfSpeech = clean(sense.partOfSpeech);
+      const key = partOfSpeech.toLowerCase() || "other";
+      if (!groups.has(key)) groups.set(key, { partOfSpeech, senses: [] });
+      const group = groups.get(key);
+      const definition = clean(sense.definition).toLowerCase();
+      const translations = values(sense.translations).map(clean).filter(Boolean);
+      const duplicate = definition
+        ? group.senses.find(item => clean(item.definition).toLowerCase() === definition)
+        : group.senses.find(item => {
+          const existing = values(item.translations).map(clean).filter(Boolean);
+          return existing.length && translations.length && existing.join("\u0000") === translations.join("\u0000");
+        });
+      if (duplicate) {
+        duplicate.translations = [...new Set([
+          ...values(duplicate.translations).map(clean),
+          ...translations
+        ].filter(Boolean))];
+        duplicate.synonyms = [...new Set([
+          ...values(duplicate.synonyms).map(clean),
+          ...values(sense.synonyms).map(clean)
+        ].filter(Boolean))];
+        duplicate.antonyms = [...new Set([
+          ...values(duplicate.antonyms).map(clean),
+          ...values(sense.antonyms).map(clean)
+        ].filter(Boolean))];
+        if (!clean(duplicate.note) && clean(sense.note)) duplicate.note = clean(sense.note);
+        return;
+      }
+      group.senses.push({
+        ...sense,
+        translations,
+        // Examples are rendered once in the standalone bilingual section below.
+        examples: []
+      });
     });
     return [...groups.values()];
   }
@@ -287,25 +319,17 @@
     return `<div class="sense-related"><span>${esc(label)}</span>${rows.map(item => `<em>${esc(item)}</em>`).join("")}</div>`;
   }
 
-  function renderSense(sense, index) {
-    const translations = values(sense.translations).map(clean).filter(Boolean);
-    const examples = values(sense.examples).map(clean).filter(Boolean);
-    const exampleTranslations = Array.isArray(sense.exampleTranslations)
-      ? sense.exampleTranslations.map(clean)
-      : [];
-    const exampleSources = Array.isArray(sense.exampleSources)
-      ? sense.exampleSources.map(clean)
-      : [];
-    const exampleAudioUrls = Array.isArray(sense.exampleAudioUrls)
-      ? sense.exampleAudioUrls.map(clean)
-      : [];
-    const exampleRows = examples.map((example, exampleIndex) => {
-      const translated = exampleTranslations[exampleIndex];
-      const source = exampleSources[exampleIndex];
-      const audioUrl = exampleAudioUrls[exampleIndex];
-      return `<div><span>例</span>${audioUrl ? `<button class="example-audio" type="button" data-audio-url="${esc(audioUrl)}" title="播放例句" aria-label="播放例句">▶</button>` : ""}${esc(example)}${translated ? `<small class="example-translation">${esc(translated)}</small>` : ""}${source ? `<small class="example-source">${esc(source)}</small>` : ""}</div>`;
-    });
-    return `<div class="sense"><span class="sense-number">${index + 1}</span><div class="sense-copy">${translations.length ? `<div class="sense-translation">${translations.map(esc).join("；")}</div>` : ""}<div class="definition">${esc(sense.definition || "暂无英文释义")}</div>${sense.note ? `<div class="sense-note">${esc(sense.note)}</div>` : ""}${exampleRows.length ? `<div class="example">${exampleRows.join("")}</div>` : ""}${renderRelated("近义", sense.synonyms)}${renderRelated("反义", sense.antonyms)}<div class="sense-footer">${copyButton("sense", "复制本条释义")}</div></div></div>`;
+  function renderMeaningGroup(group) {
+    const senses = values(group.senses).filter(item => item && typeof item === "object");
+    const translations = [...new Set(senses.flatMap(sense => values(sense.translations).map(clean)).filter(Boolean))];
+    const definitions = [...new Set(senses.map(sense => clean(sense.definition)).filter(Boolean))];
+    const notes = [...new Set(senses.map(sense => clean(sense.note)).filter(Boolean))];
+    const synonyms = [...new Set(senses.flatMap(sense => values(sense.synonyms).map(clean)).filter(Boolean))];
+    const antonyms = [...new Set(senses.flatMap(sense => values(sense.antonyms).map(clean)).filter(Boolean))];
+    const definitionRows = definitions.length
+      ? `<div class="meaning-definitions">${definitions.map((definition, index) => `<div class="meaning-definition"><span>${index + 1}</span><span>${esc(definition)}</span></div>`).join("")}</div>`
+      : `<div class="definition">暂无英文释义</div>`;
+    return `<section class="meaning-group"><div class="meaning-heading"><strong>${esc(partOfSpeechLabel(group.partOfSpeech))}</strong><span>${senses.length} 个义项</span></div><div class="sense meaning-summary"><span class="meaning-bullet">•</span><div class="sense-copy">${translations.length ? `<div class="sense-translation">${translations.map(esc).join("；")}</div>` : ""}${definitionRows}${notes.map(note => `<div class="sense-note">${esc(note)}</div>`).join("")}${renderRelated("近义", synonyms)}${renderRelated("反义", antonyms)}<div class="sense-footer">${copyButton("sense", "复制本词性释义")}</div></div></div></section>`;
   }
 
   function renderDictionaryExamples(examples) {
@@ -319,8 +343,13 @@
       .filter(row => row.example)
       .slice(0, 48);
     if (!rows.length) return "";
-    const body = rows.map(row => `<div class="dictionary-example-row">${row.audioUrl ? `<button class="example-audio" type="button" data-audio-url="${esc(row.audioUrl)}" title="播放例句" aria-label="播放例句">▶</button>` : ""}<div><div class="dictionary-example-en">${esc(row.example)}</div>${row.translation ? `<div class="dictionary-example-zh">${esc(row.translation)}</div>` : ""}${row.source ? `<small class="example-source">${esc(row.source)}</small>` : ""}</div></div>`).join("");
-    return `<details class="dictionary-extra" open><summary><span>双语例句</span><span class="source-badge">${rows.length}</span></summary><div class="dictionary-extra-body">${body}</div></details>`;
+    const renderRow = row => `<div class="dictionary-example-row">${row.audioUrl ? `<button class="example-audio" type="button" data-audio-url="${esc(row.audioUrl)}" title="播放例句" aria-label="播放例句">▶</button>` : ""}<div><div class="dictionary-example-en">${esc(row.example)}</div>${row.translation ? `<div class="dictionary-example-zh">${esc(row.translation)}</div>` : ""}${row.source ? `<small class="example-source">${esc(row.source)}</small>` : ""}</div></div>`;
+    const visibleRows = rows.slice(0, 5).map(renderRow).join("");
+    const remainingRows = rows.slice(5);
+    const more = remainingRows.length
+      ? `<div class="dictionary-example-more" hidden>${remainingRows.map(renderRow).join("")}</div><button class="dictionary-more-button" type="button" data-expand-examples data-expanded="false" data-more-count="${remainingRows.length}">显示更多例句（${remainingRows.length}）</button>`
+      : "";
+    return `<details class="dictionary-extra" open><summary><span>双语例句</span><span class="source-badge">${rows.length}</span></summary><div class="dictionary-extra-body"><div class="dictionary-example-visible">${visibleRows}</div>${more}</div></details>`;
   }
 
   function renderDictionaryPhrases(phrases) {
@@ -375,7 +404,7 @@
     const sourceMeta = entry.source
       ? `<div class="dictionary-source-row"><span>${source}${entry.source.license ? ` · ${esc(entry.source.license)}` : ""}</span></div>`
       : "";
-    return `<div class="dictionary-entry result-body"><div class="word-head"><strong>${esc(entry.word)}</strong>${entry.phonetic ? `<span class="phonetic">${esc(entry.phonetic)}</span>` : ""}${audio}</div>${renderDictionaryTags(entry.tags)}${renderWordForms(entry.wordForms)}<div class="detail-heading">详细释义</div>${groups.map(group => `<section class="meaning-group"><div class="meaning-heading"><strong>${esc(partOfSpeechLabel(group.partOfSpeech))}</strong><span>${group.senses.length} 个义项</span></div>${group.senses.map((sense, index) => renderSense(sense, index)).join("")}</section>`).join("")}${renderDictionaryExamples(entry.examples)}${renderDictionaryPhrases(entry.phrases)}${renderRelatedWords(entry.relatedWords)}${renderWebTranslations(entry.webTranslations)}${sourceMeta}</div>`;
+    return `<div class="dictionary-entry result-body"><div class="word-head"><strong>${esc(entry.word)}</strong>${entry.phonetic ? `<span class="phonetic">${esc(entry.phonetic)}</span>` : ""}${audio}</div>${renderDictionaryTags(entry.tags)}${renderWordForms(entry.wordForms)}<div class="detail-heading">详细释义</div>${groups.map(renderMeaningGroup).join("")}${renderDictionaryExamples(entry.examples)}${renderDictionaryPhrases(entry.phrases)}${renderRelatedWords(entry.relatedWords)}${renderWebTranslations(entry.webTranslations)}${sourceMeta}</div>`;
   }
 
   function renderCloudResult(result) {
@@ -790,6 +819,18 @@
     });
 
     document.addEventListener("click", event => {
+      const expandExamples = event.target.closest("[data-expand-examples]");
+      if (expandExamples) {
+        const more = expandExamples.parentElement?.querySelector(".dictionary-example-more");
+        if (!more) return;
+        const expanded = expandExamples.dataset.expanded === "true";
+        more.hidden = expanded;
+        expandExamples.dataset.expanded = String(!expanded);
+        expandExamples.textContent = expanded
+          ? `显示更多例句（${expandExamples.dataset.moreCount || 0}）`
+          : "收起例句";
+        return;
+      }
       const copyControl = event.target.closest("[data-copy-scope]");
       if (copyControl) {
         event.preventDefault();

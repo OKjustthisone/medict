@@ -314,6 +314,11 @@ button:disabled { cursor: wait; opacity: .62; }
 .meaning-heading span { color: #a1a4a8; font-size: 9px; }
 .sense { display: grid; grid-template-columns: 19px minmax(0, 1fr); gap: 7px; padding: 8px 0; border-top: 1px dashed #eeeef0; }
 .meaning-heading + .sense { border-top: 0; }
+.meaning-summary { grid-template-columns: 19px minmax(0, 1fr); }
+.meaning-bullet { display: grid; width: 18px; height: 18px; margin-top: 1px; place-items: center; color: #7180a1; font-size: 16px; line-height: 1; }
+.meaning-definitions { display: grid; gap: 4px; margin-top: 4px; }
+.meaning-definition { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 4px; color: #3e4248; font-size: 11px; line-height: 1.55; user-select: text; }
+.meaning-definition > span:first-child { color: #9a9fa7; font-size: 9px; font-weight: 700; }
 .sense-number { display: grid; width: 18px; height: 18px; margin-top: 1px; place-items: center; border-radius: 50%; color: #7180a1; background: #f0f3f9; font-size: 9px; font-weight: 700; }
 .sense-copy { min-width: 0; }
 .sense-translation { margin-bottom: 3px; color: #1d725d; font-size: 12px; font-weight: 650; line-height: 1.55; user-select: text; }
@@ -340,6 +345,9 @@ button:disabled { cursor: wait; opacity: .62; }
 .dictionary-extra:not([open]) summary::after { transform: rotate(0deg); }
 .dictionary-extra .source-badge { min-width: 22px; padding: 2px 5px; text-align: center; }
 .dictionary-extra-body { display: grid; gap: 6px; padding: 1px 0 8px; }
+.dictionary-example-more[hidden] { display: none; }
+.dictionary-more-button { justify-self: start; margin: 1px 0 2px; padding: 5px 9px; border: 1px solid #dfe4ef; border-radius: 999px; color: #6378a8; background: #f5f7fb; cursor: pointer; font-size: 9px; font-weight: 650; }
+.dictionary-more-button:hover { color: white; border-color: var(--blue); background: var(--blue); }
 .dictionary-example-row { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 5px; padding: 6px 7px; border-radius: 6px; background: #f7f8f8; }
 .dictionary-example-en { color: #50555b; font-family: Georgia, "Microsoft YaHei UI", serif; font-size: 10px; line-height: 1.5; user-select: text; }
 .dictionary-example-zh { margin-top: 2px; color: #8b8f95; font-size: 9px; line-height: 1.45; user-select: text; }
