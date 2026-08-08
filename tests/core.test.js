@@ -3,7 +3,6 @@ const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
-const { DictionaryManager, normalizeEntry, parseCsv } = require("../src/main/dictionary-manager");
 const { DrugCache, normalizeDrugCacheKey, SEVEN_DAYS_MS } = require("../src/main/drug-cache");
 const { normalizeAccelerator, registerShortcutConfiguration, validateShortcutConfiguration } = require("../src/main/shortcut-manager");
 const { buildYoudaoDictionaryPayload, normalizeFreeDictionary, normalizeMerriamItem, normalizeYoudaoDictionary, normalizeYoudaoLegacyPayload, normalizeYoudaoTranslation } = require("../src/main/services/dictionary-api");
@@ -12,44 +11,6 @@ const { parseSelectionLine } = require("../src/main/selection-monitor");
 const { lookupWord, requestLanguagePair, sortByServiceOrder } = require("../src/main/services/word-lookup");
 const { createBaiduError, normalizeBaiduDictionary, targetForBaidu } = require("../src/main/services/translation");
 const { mergeSettings, normalizeDictionaryServiceOrder } = require("../src/main/store");
-
-test("normalizes a local bilingual dictionary entry", () => {
-  const entry = normalizeEntry({
-    word: "testable",
-    phonetic: "/ˈtestəbəl/",
-    pos: "adjective",
-    definition: "able to be tested",
-    translation: "可测试的"
-  }, { id: "fixture", name: "Fixture", license: "test" });
-  assert.equal(entry.word, "testable");
-  assert.equal(entry.senses[0].partOfSpeech, "adjective");
-  assert.deepEqual(entry.senses[0].translations, ["可测试的"]);
-});
-
-test("parses quoted CSV cells used by ECDICT-style exports", () => {
-  const rows = parseCsv('word,definition,translation\n"well-being","a state, condition","幸福；安康"\n');
-  assert.deepEqual(rows, [
-    ["word", "definition", "translation"],
-    ["well-being", "a state, condition", "幸福；安康"]
-  ]);
-});
-
-test("loads and searches the bundled local dictionary", async () => {
-  const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "medict-test-"));
-  try {
-    const manager = new DictionaryManager({
-      builtinPath: path.join(__dirname, "..", "src", "data", "dictionaries", "medict-demo.json"),
-      userDictionaryDir: tempDirectory
-    });
-    await manager.load();
-    const result = await manager.search("serendipity");
-    assert.equal(result.type, "dictionary");
-    assert.ok(result.results.some(entry => entry.word === "serendipity"));
-    assert.ok(manager.listSources()[0].entryCount >= 6);
-  } finally {
-    await fs.rm(tempDirectory, { recursive: true, force: true });
-  }
-});
 
 test("creates the Youdao web V4 signature payload without exposing signing logic to the UI", () => {
   const payload = buildYoudaoDictionaryPayload("This is a reasonably long sentence for signing.", { le: "en" });
@@ -431,6 +392,16 @@ test("selection lookup requests only the word pipeline", async () => {
   assert.doesNotMatch(rendererSelection, /DRUG|payload\.drug|未找到该药物/);
 });
 
+test("does not initialize or expose local dictionary storage", async () => {
+  const mainSource = await fs.readFile(path.join(__dirname, "..", "src", "main", "main.js"), "utf8");
+  const preloadSource = await fs.readFile(path.join(__dirname, "..", "src", "main", "preload.js"), "utf8");
+  const html = await fs.readFile(path.join(__dirname, "..", "src", "renderer", "index.html"), "utf8");
+
+  assert.doesNotMatch(mainSource, /dictionary-manager|dictionary:list|dictionary:import|userData,\s*"dictionaries"/);
+  assert.doesNotMatch(preloadSource, /listDictionaries|importDictionary/);
+  assert.doesNotMatch(html, /dictionary-count|dictionary-sources|<h3>本地词典<\/h3>/);
+});
+
 test("normalizes Youdao web sentence translation", () => {
   const result = normalizeYoudaoTranslation({
     fanyi: {
@@ -486,31 +457,7 @@ test("publishes the Youdao dictionary result before slower supplemental services
   assert.equal(final.partial, false);
 });
 
-test("uses an exact local dictionary hit without calling a cloud provider", async () => {
-  let cloudCalls = 0;
-  let dictionaryCalls = 0;
-  const localEntry = { word: "serendipity", senses: [{ definition: "a fortunate discovery" }] };
-  const result = await lookupWord("serendipity", {
-    dictionaryManager: {
-      searchLocal: async () => ({ exactResults: [localEntry], suggestions: [], warnings: [], sources: [] })
-    },
-    settings: mergeSettings({}),
-    queryDictionary: async () => {
-      dictionaryCalls += 1;
-      return null;
-    },
-    translate: async () => {
-      cloudCalls += 1;
-      return { results: [], warnings: [] };
-    }
-  });
-  assert.equal(result.strategy, "local");
-  assert.equal(result.localResults[0].word, "serendipity");
-  assert.equal(cloudCalls, 0);
-  assert.equal(dictionaryCalls, 0);
-});
-
-test("falls back to enabled cloud lookup when local dictionaries miss", async () => {
+test("uses enabled cloud lookup when no dictionary returns a result", async () => {
   let cloudCalls = 0;
   const result = await lookupWord("serendipity", {
     dictionaryManager: {

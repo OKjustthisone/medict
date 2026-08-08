@@ -48,7 +48,7 @@ async function connect(url) {
 }
 
 async function main() {
-  const executable = path.resolve("release", "win-unpacked", "Medict.exe");
+  const executable = path.resolve(process.argv[2] || path.join("release", "win-unpacked", "Medict.exe"));
   const port = 9300 + Math.floor(Math.random() * 500);
   const userData = await fs.mkdtemp(path.join(os.tmpdir(), "medict-layout-"));
   const child = spawn(executable, [
@@ -222,7 +222,7 @@ async function main() {
       throw new Error(`Dictionary supporting text is still too small: ${JSON.stringify(concise.auxiliarySizes)}`);
     }
 
-    const finalDeadline = Date.now() + 30000;
+    const finalDeadline = Date.now() + 60000;
     while (Date.now() < finalDeadline) {
       const status = await client.send("Runtime.evaluate", {
         expression: `document.querySelector("#request-status")?.textContent || ""`,
@@ -252,7 +252,7 @@ async function main() {
       expression: `document.querySelector(".history-item").click()`,
       returnByValue: true
     });
-    const historyReplayDeadline = Date.now() + 3000;
+    const historyReplayDeadline = Date.now() + 5000;
     let historyReplayStatus = "";
     while (Date.now() < historyReplayDeadline) {
       const replay = await client.send("Runtime.evaluate", {

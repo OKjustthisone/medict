@@ -87,8 +87,6 @@ function requestLanguagePair(value, settings = {}, options = {}) {
 function composeOnlineResult({
   value,
   settings,
-  local,
-  suggestions,
   providers,
   youdaoDictionaryEntry,
   freeDictionaryEntry,
@@ -126,19 +124,15 @@ function composeOnlineResult({
     strategy: dictionaryResults.length ? "online-dictionary" : "cloud",
     success: dictionaryResults.length > 0 || cloudResults.length > 0,
     partial,
-    localResults: [],
     dictionaryResults,
     cloudResults,
     displayResults,
-    suggestions,
     providers,
     warnings: [
-      ...(local.warnings || []),
       ...dictionaryWarnings,
       ...definitionWarnings,
       ...(cloudResponse.warnings || [])
     ],
-    sources: local.sources || [],
     sourceLanguage: cloudResponse.source || settings.translation?.source || "auto",
     targetLanguage: cloudResponse.target || settings.translation?.target || "zh-CN"
   };
@@ -147,7 +141,6 @@ function composeOnlineResult({
 async function lookupWord(query, options = {}) {
   const value = clean(query);
   if (!value) throw new Error("请输入要查询的单词或文本");
-  if (!options.dictionaryManager) throw new Error("本地词典服务尚未初始化");
 
   const settings = options.settings || {};
   const languagePair = requestLanguagePair(value, settings, options);
@@ -162,26 +155,7 @@ async function lookupWord(query, options = {}) {
   const lookupOnlineDictionary = options.queryDictionary || queryFreeDictionary;
   const lookupWebDictionary = options.queryYoudaoDictionary || queryYoudaoDictionary;
   const translateDefinitions = options.translateSegments || translateSegments;
-  const local = await options.dictionaryManager.searchLocal(value);
-  const exactResults = local.exactResults || [];
-  const suggestions = local.suggestions || [];
   const providers = configuredCloudProviders(requestSettings);
-
-  if (exactResults.length) {
-    return {
-      type: "word",
-      query: value,
-      strategy: "local",
-      success: true,
-      localResults: exactResults,
-      dictionaryResults: [],
-      cloudResults: [],
-      suggestions,
-      providers,
-      warnings: local.warnings || [],
-      sources: local.sources || []
-    };
-  }
 
   const dictionaryWarnings = [];
   const youdaoPromise = isYoudaoDictionaryQuery(value, languagePair) && settings.dictionary?.youdaoDictionary?.enabled !== false
@@ -211,8 +185,6 @@ async function lookupWord(query, options = {}) {
       options.onPartial(composeOnlineResult({
         value,
         settings: requestSettings,
-        local,
-        suggestions,
         providers,
         youdaoDictionaryEntry,
         freeDictionaryEntry: null,
@@ -251,8 +223,6 @@ async function lookupWord(query, options = {}) {
   return composeOnlineResult({
     value,
     settings: requestSettings,
-    local,
-    suggestions,
     providers,
     youdaoDictionaryEntry,
     freeDictionaryEntry: enrichedFreeDictionary,

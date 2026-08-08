@@ -150,7 +150,7 @@
           <div class="section-heading">
             <div>
               <h3>云端查词</h3>
-              <p>本地未命中时，先取完整词典义项，再补充中文翻译。</p>
+              <p>单词优先返回完整在线词典，短语和句子自动补充翻译。</p>
             </div>
           </div>
 
@@ -197,7 +197,7 @@
           </div>
 
           <div class="service-order-panel">
-            <div class="order-heading"><strong>词典服务顺序</strong><span>本地词典固定最前</span></div>
+            <div class="order-heading"><strong>词典服务顺序</strong><span>按此顺序显示</span></div>
             <p class="provider-help">主面板会按此顺序显示在线词典和翻译结果，可用上下按钮调整。</p>
             <div id="dictionary-service-order" class="service-order"></div>
           </div>
@@ -214,18 +214,6 @@
               <option value="ru">Русский</option>
             </select>
           </label>
-        </section>
-
-        <section class="settings-section">
-          <div class="section-heading">
-            <div>
-              <h3>本地词典</h3>
-              <p>本轮不安装词典，先验证云端查词与药物数据。</p>
-            </div>
-            <span id="dictionary-count" class="count-pill">0 个</span>
-          </div>
-          <div id="dictionary-sources" class="dictionary-sources"></div>
-          <p class="subtle-note">后续优先支持 GoldenDict 常用的 StarDict（.ifo/.idx/.dict）、DSL，以及 MDict。词典内容需由用户按授权自行导入。</p>
         </section>
 
         <section class="settings-section">

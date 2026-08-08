@@ -11,8 +11,6 @@ contextBridge.exposeInMainWorld("medict", {
   getSettings: () => ipcRenderer.invoke("settings:get"),
   saveSettings: value => ipcRenderer.invoke("settings:save", value),
   saveLanguagePair: value => ipcRenderer.invoke("settings:set-language-pair", value),
-  listDictionaries: () => ipcRenderer.invoke("dictionary:list"),
-  importDictionary: () => ipcRenderer.invoke("dictionary:import"),
   lookupWord: (query, options) => ipcRenderer.invoke("lookup:word", query, options),
   lookupDrug: query => ipcRenderer.invoke("lookup:drug", query),
   lookupSelection: query => ipcRenderer.invoke("lookup:selection", query),

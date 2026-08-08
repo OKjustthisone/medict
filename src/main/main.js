@@ -4,7 +4,6 @@ const {
   app,
   BrowserWindow,
   clipboard,
-  dialog,
   globalShortcut,
   ipcMain,
   Menu,
@@ -13,7 +12,6 @@ const {
   shell,
   Tray
 } = require("electron");
-const { DictionaryManager } = require("./dictionary-manager");
 const { DrugCache } = require("./drug-cache");
 const { registerShortcutConfiguration, validateShortcutConfiguration } = require("./shortcut-manager");
 const { captureSelectionOnce, SelectionMonitor } = require("./selection-monitor");
@@ -25,7 +23,6 @@ const TRAY_ICON_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAADOElEQV
 
 let mainWindow = null;
 let tray = null;
-let dictionaryManager = null;
 let drugCache = null;
 let settingsStore = null;
 let selectionMonitor = null;
@@ -37,10 +34,16 @@ let shortcutCaptureInFlight = false;
 let shortcutsSuspended = false;
 const wordLookupCache = new Map();
 const WORD_LOOKUP_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
-const WORD_LOOKUP_CACHE_LIMIT = 100;
+// Full dictionary responses contain examples and related words; keep the
+// in-memory cache bounded so repeated lookups cannot grow the main process.
+const WORD_LOOKUP_CACHE_LIMIT = 32;
 const QUERY_LANGUAGE_CODES = new Set(["auto", "zh-CN", "en", "ja", "ko", "fr", "de", "es", "ru"]);
 
 const ATOM_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect x="2" y="2" width="60" height="60" rx="16" fill="#4c72e8"/><g fill="none" stroke="#fff" stroke-linecap="round" stroke-width="3.1" opacity=".94"><ellipse cx="32" cy="32" rx="23" ry="9"/><ellipse cx="32" cy="32" rx="23" ry="9" transform="rotate(60 32 32)"/><ellipse cx="32" cy="32" rx="23" ry="9" transform="rotate(-60 32 32)"/></g><circle cx="32" cy="32" r="6.5" fill="#e9fbff"/><circle cx="32" cy="32" r="3.5" fill="#27a9d4"/></svg>`;
+
+// This window only renders text and SVG controls; keeping Chromium off the GPU
+// avoids reserving a separate GPU process with no visible benefit for the app.
+app.disableHardwareAcceleration();
 
 function appIconPath() {
   const candidates = app.isPackaged
@@ -199,7 +202,6 @@ async function runWordLookup(query, requestOptions = {}, onPartial = null) {
   const cached = readWordLookupCache(cacheKey);
   if (cached) return cached;
   const result = await lookupWord(query, {
-    dictionaryManager,
     settings,
     source: requestOptions.source,
     target: requestOptions.target,
@@ -354,22 +356,6 @@ function registerIpc() {
     wordLookupCache.clear();
     return settingsStore.save(settings);
   });
-  ipcMain.handle("dictionary:list", () => dictionaryManager.listSources());
-  ipcMain.handle("dictionary:import", async () => {
-    const result = await dialog.showOpenDialog(mainWindow, {
-      title: "导入本地词典",
-      properties: ["openFile"],
-      filters: [
-        { name: "Medict 词典文件", extensions: ["json", "csv", "txt"] },
-        { name: "所有文件", extensions: ["*"] }
-      ]
-    });
-    if (result.canceled || !result.filePaths[0]) {
-      return { canceled: true, sources: dictionaryManager.listSources() };
-    }
-    const sources = await dictionaryManager.importFile(result.filePaths[0]);
-    return { canceled: false, sources };
-  });
 
   ipcMain.handle("lookup:word", (event, query, requestOptions = {}) => runWordLookup(query, requestOptions, partial => {
     if (event.sender.isDestroyed()) return;
@@ -513,11 +499,6 @@ async function bootstrap() {
   await settingsStore.load();
   drugCache = new DrugCache(path.join(userData, "drug-cache.json"));
   await drugCache.load();
-  dictionaryManager = new DictionaryManager({
-    builtinPath: null,
-    userDictionaryDir: path.join(userData, "dictionaries")
-  });
-  await dictionaryManager.load();
   registerIpc();
   createWindow();
   createTray();

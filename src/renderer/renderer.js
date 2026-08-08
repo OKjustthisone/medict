@@ -4,7 +4,6 @@
   const api = window.medict;
   const state = {
     settings: null,
-    sources: [],
     requestId: 0,
     activeSelectionRequestId: null,
     selectionStatus: { available: false, active: false, message: "正在启动自动划词" },
@@ -299,11 +298,7 @@
   }
 
   function renderIdle() {
-    const localCount = state.sources.reduce((sum, source) => sum + Number(source.entryCount || 0), 0);
-    const localMessage = localCount
-      ? `已加载 ${localCount.toLocaleString()} 条本地词条；精确命中时不会访问云端。`
-      : "当前未安装本地词典；英文单词会查完整在线词典，短语和句子会自动翻译。";
-    $("#results").innerHTML = `<div class="empty-state"><div><span class="empty-state-icon" aria-hidden="true"><svg viewBox="0 0 64 64"><rect x="2" y="2" width="60" height="60" rx="16" fill="#4c72e8"/><g fill="none" stroke="#fff" stroke-linecap="round" stroke-width="3.1" opacity=".94"><ellipse cx="32" cy="32" rx="23" ry="9"/><ellipse cx="32" cy="32" rx="23" ry="9" transform="rotate(60 32 32)"/><ellipse cx="32" cy="32" rx="23" ry="9" transform="rotate(-60 32 32)"/></g><circle cx="32" cy="32" r="6.5" fill="#e9fbff"/><circle cx="32" cy="32" r="3.5" fill="#27a9d4"/></svg></span><strong>一个输入框，两种查询</strong><p>${esc(localMessage)} 鼠标划词只执行普通查词；药物数据仅在点击“药物查询”时请求。</p></div></div>`;
+    $("#results").innerHTML = `<div class="empty-state"><div><span class="empty-state-icon" aria-hidden="true"><svg viewBox="0 0 64 64"><rect x="2" y="2" width="60" height="60" rx="16" fill="#4c72e8"/><g fill="none" stroke="#fff" stroke-linecap="round" stroke-width="3.1" opacity=".94"><ellipse cx="32" cy="32" rx="23" ry="9"/><ellipse cx="32" cy="32" rx="23" ry="9" transform="rotate(60 32 32)"/><ellipse cx="32" cy="32" rx="23" ry="9" transform="rotate(-60 32 32)"/></g><circle cx="32" cy="32" r="6.5" fill="#e9fbff"/><circle cx="32" cy="32" r="3.5" fill="#27a9d4"/></svg></span><strong>一个输入框，两种查询</strong><p>英文单词显示完整在线词典，短语和句子自动翻译。鼠标划词只执行普通查词；药物数据仅在点击“药物查询”时请求。</p></div></div>`;
   }
 
   function loadingBlock(label, query) {
@@ -323,7 +318,6 @@
   }
 
   function sourceBadge(result) {
-    if (result.strategy === "local") return result.localResults?.[0]?.source?.name || "本地词典";
     const firstDisplay = result.displayResults?.[0];
     if (firstDisplay?.displayType === "cloud") {
       return firstDisplay.name || firstDisplay.provider || "在线翻译";
@@ -537,12 +531,6 @@
       : renderDictionaryEntry(item)).join("");
   }
 
-  function renderSuggestions(suggestions) {
-    const words = values(suggestions).map(item => clean(item.word || item)).filter(Boolean);
-    if (!words.length) return "";
-    return `<div class="suggestion-row">${words.slice(0, 8).map(word => `<button class="suggestion-button" type="button" data-query-word="${esc(word)}">${esc(word)}</button>`).join("")}</div>`;
-  }
-
   function renderWord(result, error = "") {
     const query = result?.query || clean($("#query-input").value);
     if (error) {
@@ -552,15 +540,13 @@
 
     const heading = `<div class="result-block-heading"><div class="heading-title"><span class="heading-label">WORD</span><h2>${esc(query)}</h2></div><span class="source-badge">${esc(sourceBadge(result))}</span></div>`;
     let content = "";
-    if (result.strategy === "local" && result.localResults?.length) {
-      content = result.localResults.map(renderDictionaryEntry).join("");
-    } else if (result.dictionaryResults?.length) {
-      content = `${result.displayResults?.length ? renderOrderedResults(result.displayResults) : `${result.dictionaryResults.map(renderDictionaryEntry).join("")}${renderCloudReference(result.cloudResults, true)}`}${renderSuggestions(result.suggestions)}`;
+    if (result.dictionaryResults?.length) {
+      content = result.displayResults?.length ? renderOrderedResults(result.displayResults) : `${result.dictionaryResults.map(renderDictionaryEntry).join("")}${renderCloudReference(result.cloudResults, true)}`;
     } else if (result.cloudResults?.length) {
-      content = `<div class="result-body">${renderCloudReference(result.cloudResults)}${renderSuggestions(result.suggestions)}</div>`;
+      content = `<div class="result-body">${renderCloudReference(result.cloudResults)}</div>`;
     } else {
       const configured = values(result.providers).length > 0;
-      content = `<div class="notice ${configured ? "warning" : ""}"><strong>${configured ? "云端没有返回结果" : "未配置可用的云端服务"}</strong>${configured ? "请检查网络或展开下方错误信息。" : "在设置中启用网易有道网页服务或 Google 兼容模式，也可以填写百度凭据。"}${renderSuggestions(result.suggestions)}</div>`;
+      content = `<div class="notice ${configured ? "warning" : ""}"><strong>${configured ? "云端没有返回结果" : "未配置可用的云端服务"}</strong>${configured ? "请检查网络或展开下方错误信息。" : "在设置中启用网易有道网页服务或 Google 兼容模式，也可以填写百度凭据。"}</div>`;
     }
     return `<section class="result-block">${heading}${content}${warningDetails(result.warnings)}</section>`;
   }
@@ -720,8 +706,6 @@
         ? (result.cache?.hit ? "药物结果来自 7 天缓存" : result.success ? "药物数据已返回并缓存" : "未找到该药物，结果已缓存")
         : (result.cache?.hit
           ? "查询结果已从缓存返回"
-          : result.strategy === "local"
-          ? "本地词典命中"
           : result.dictionaryResults?.length
             ? "在线词典已返回"
             : result.success ? "翻译已返回" : "在线查询未返回结果"), result.success === false ? "error" : "");
@@ -740,14 +724,6 @@
     element.classList.toggle("active", Boolean(state.selectionStatus.active));
     element.classList.toggle("error", state.selectionStatus.available === false && !state.selectionStatus.active);
     element.querySelector(".selection-label").textContent = state.selectionStatus.message || (state.selectionStatus.active ? "自动划词已开启" : "自动划词未开启");
-  }
-
-  function renderDictionarySources() {
-    const count = state.sources.length;
-    $("#dictionary-count").textContent = `${count} 个`;
-    $("#dictionary-sources").innerHTML = count
-      ? state.sources.map(source => `<div class="dictionary-source"><span>${esc(source.name)}</span><span>${Number(source.entryCount || 0).toLocaleString()} 条</span></div>`).join("")
-      : '<div class="dictionary-source-empty">尚未安装本地词典</div>';
   }
 
   function setField(id, value) {
@@ -784,7 +760,6 @@
     setShortcutField("shortcut-selection-lookup", settings.shortcuts?.selectionLookup ?? "CommandOrControl+Alt+D");
     setChecked("hide-on-close", settings.window?.hideOnClose !== false);
     $("#settings-status").textContent = "";
-    renderDictionarySources();
     renderDictionaryServiceOrder(dictionary.serviceOrder);
     updateGoogleMode();
   }
@@ -995,12 +970,6 @@
         audio.play().catch(error => setRequestStatus(`发音播放失败：${error.message || error}`, "error"));
         return;
       }
-      const queryButton = event.target.closest("[data-query-word]");
-      if (queryButton) {
-        $("#query-input").value = queryButton.dataset.queryWord;
-        runManual("word");
-        return;
-      }
       const external = event.target.closest("[data-external-url]");
       if (external) {
         event.preventDefault();
@@ -1047,14 +1016,12 @@
     }
     bindEvents();
     try {
-      const [settings, sources, pinned, selectionStatus] = await Promise.all([
+      const [settings, pinned, selectionStatus] = await Promise.all([
         api.getSettings(),
-        api.listDictionaries(),
         api.isPinned(),
         api.getSelectionStatus()
       ]);
       state.settings = settings;
-      state.sources = sources;
       state.pinned = pinned;
       state.history = loadHistory();
       applyFontScale(settings.appearance?.fontScale);

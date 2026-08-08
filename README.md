@@ -2,7 +2,7 @@
 
 Medict 是一个面向 Windows 的小型桌面查词窗口。界面参考 [pot-desktop](https://github.com/pot-app/pot-desktop) 的轻量弹窗思路，但查询模型只有一个输入框和两个动作：
 
-- **查词**：先查本地词典的精确词条；没有命中时，单词调用网易有道网页词典和其他在线词典，返回英美分开的音标与发音、词性、多义项、词形、词组和双语例句；短语或句子自动切换为网易有道网页翻译，也可叠加 Google / 百度翻译。
+- **查词**：单词调用网易有道网页词典和其他在线词典，返回英美分开的音标与发音、词性、多义项、词形、词组和双语例句；短语或句子自动切换为网易有道网页翻译，也可叠加 Google / 百度翻译。
 - **药物查询**：调用从 `drugshop` 集成的完整公开数据查询链路。
 - **自动划词**：在其他 Windows 应用中用鼠标选中文本后，自动执行普通查词并弹出结果窗口；DrugShop 只在点击“药物查询”按钮时请求。自动查词可以在设置中开关。
 - **快捷键**：默认使用 `Ctrl + Alt + M` 打开面板，使用 `Ctrl + Alt + D` 读取当前选区并查询；两个快捷键都可在设置中重新录入或清除。
@@ -12,7 +12,7 @@ Medict 是一个面向 Windows 的小型桌面查词窗口。界面参考 [pot-d
 
 ## 当前可运行范围
 
-本轮按需求暂不安装本地词典。网易有道网页服务可在设置中开关：单词走网页词典，短语和长文本走网页翻译，不需要 API Key；Free Dictionary 也可以单独开关。默认服务顺序为网易有道、Free Dictionary、百度、Google，用户可以在设置中用上下按钮调整。Google 兼容模式默认开启，也可以切换到 Google Cloud Translation API。短语和长文本不一定返回词典字段，会继续显示可用的翻译结果。
+当前版本不加载或分发本地词典，启动时只初始化在线服务、药物缓存和划词助手。网易有道网页服务可在设置中开关：单词走网页词典，短语和长文本走网页翻译，不需要 API Key；Free Dictionary 也可以单独开关。默认服务顺序为网易有道、Free Dictionary、百度、Google，用户可以在设置中用上下按钮调整。Google 兼容模式默认开启，也可以切换到 Google Cloud Translation API。短语和长文本不一定返回词典字段，会继续显示可用的翻译结果。
 
 百度词典版使用官方 `texttrans-with-dict/v1` 接口：应用只保存用户输入的 API Key / Secret Key，并在本机换取短期 Access Token；百度服务权限、额度和词典字段以账号开通情况为准。标准版 QPS 较低时，Medict 会对百度请求按密钥排队，并在 QPS 错误后自动重试一次。百度接口没有返回完整词典数据时，Medict 会继续使用其他已启用的服务，不会因为百度失败而覆盖其他结果。
 
@@ -50,15 +50,12 @@ npm.cmd run dist
 ```text
 输入或划词
    │
-   ├─ 本地词典精确命中 ─→ 直接显示本地释义，不访问云端
-   │
-   └─ 本地未命中
-        ├─ 单词/汉英词典 ─→ 按设置顺序显示已启用的在线服务
-        │                 ├─ 网易有道网页词典：快速显示简明释义、双发音、词形、词组与例句
-        │                 ├─ 百度词典版：中英词典字段
-        │                 ├─ Free Dictionary：英文完整义项
-        │                 └─ Google：整词翻译补充
-        └─ 短语或文本 ─→ 网易有道网页翻译 + 其他已启用翻译服务
+   ├─ 单词/汉英词典 ─→ 按设置顺序显示已启用的在线服务
+   │                 ├─ 网易有道网页词典：快速显示简明释义、双发音、词形、词组与例句
+   │                 ├─ 百度词典版：中英词典字段
+   │                 ├─ Free Dictionary：英文完整义项
+   │                 └─ Google：整词翻译补充
+   └─ 短语或文本 ─→ 网易有道网页翻译 + 其他已启用翻译服务
 
 划词事件只启动上面的普通查词流程
 
@@ -70,17 +67,6 @@ npm.cmd run dist
 Windows 助手优先通过 UI Automation 读取选中文字；不支持的应用会临时发送 `Ctrl+C`，读取后尽量恢复原剪贴板内容。密码输入框会被跳过，文本只在本机进入查词流程，不会写入日志。
 
 当前自动触发针对鼠标选词。某些以管理员身份运行、受保护或不暴露可访问性信息的应用，可能需要以相同权限运行 Medict 才能读取选区。
-
-## 本地词典规划与授权边界
-
-GoldenDict 不是单一词典文件格式，它常用 StarDict、DSL、Dictd、MDict 等格式。下一阶段优先实现：
-
-1. StarDict `.ifo/.idx/.dict`（以及 `.dict.dz`）只读解析；
-2. DSL 只读解析；
-3. MDict `.mdx/.mdd` 适配；
-4. SQLite 索引，支持大型词库快速查询。
-
-Oxford Advanced Learner's、Longman 和 Merriam-Webster 的完整词典内容并不因为可下载就自动成为开源内容。Medict 只提供格式适配和查询接口，不随程序分发这些词典；用户需要确认自己导入内容的许可证和使用权限。
 
 当前在线英英释义来自 Free Dictionary API；百度词典版提供中英词典字段。应用显示接口响应中附带的原始词条链接和许可证信息，不复制或打包其词典数据库；若某个公共服务不可用，其他已配置的服务仍可独立返回。
 
@@ -95,8 +81,7 @@ Oxford Advanced Learner's、Longman 和 Merriam-Webster 的完整词典内容并
 ```text
 src/renderer/                 紧凑单窗口 UI
 src/main/main.js              窗口、托盘、并行查询和 IPC
-src/main/dictionary-manager.js 本地词典索引边界
-src/main/services/word-lookup.js 本地优先 / 云端回退编排
+src/main/services/word-lookup.js 在线词典 / 云端回退编排
 src/main/services/dictionary-api.js Free Dictionary / Oxford / Merriam-Webster 适配
 src/main/services/translation.js Google / 有道 / 百度词典版适配与限流
 src/main/services/drugshop.js DrugShop 公开数据库聚合
