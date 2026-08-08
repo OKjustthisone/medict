@@ -309,6 +309,15 @@ function youdaoExampleRows(examples) {
   return output;
 }
 
+function isYoudaoWordAlignmentRow(row) {
+  const example = clean(row?.example);
+  if (!example) return false;
+  const words = example.replace(/[.!?…]+$/g, "").split(/\s+/).filter(Boolean);
+  if (words.length !== 1 || !/^[a-z][a-z'-]*$/i.test(words[0])) return false;
+  const translation = clean(row?.translation).replace(/[。！？.!?…]+$/g, "");
+  return translation.split(/\s+/).filter(Boolean).length <= 1;
+}
+
 function normalizeYoudaoWordForms(word, extraRows = []) {
   const rows = [
     ...(Array.isArray(word?.wfs) ? word.wfs : []),
@@ -541,6 +550,7 @@ function youdaoDictionaryExamples(data) {
   const output = [];
   const seen = new Set();
   for (const row of rows) {
+    if (isYoudaoWordAlignmentRow(row)) continue;
     const key = `${row.example}\u0000${row.translation}`;
     if (seen.has(key)) continue;
     seen.add(key);

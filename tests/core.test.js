@@ -274,6 +274,26 @@ test("keeps Youdao expanded meanings, sentence corpus, phrases and related words
   assert.ok(entry.tags.includes("CET4"));
 });
 
+test("filters Youdao word-alignment rows from bilingual examples", () => {
+  const entry = normalizeYoudaoDictionary({
+    ec: {
+      word: {
+        word: "happy",
+        trs: [{ pos: "adj.", tran: "快乐的" }]
+      }
+    },
+    auth_sents_part: {
+      sent: [
+        { foreign: "A", source: "alignment", sense: { word: "一只" } },
+        { foreign: "happy", source: "alignment", sense: { word: "快乐" } },
+        { foreign: "little", source: "alignment", sense: { word: "小" } },
+        { foreign: "A happy little dog decided to visit this place.", source: "exam" }
+      ]
+    }
+  }, "happy");
+  assert.deepEqual(entry.examples.map(row => row.example), ["A happy little dog decided to visit this place."]);
+});
+
 test("normalizes Youdao web sentence translation", () => {
   const result = normalizeYoudaoTranslation({
     fanyi: {
