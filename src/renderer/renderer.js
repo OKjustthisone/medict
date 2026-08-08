@@ -343,7 +343,7 @@
       .filter(row => row.example)
       .slice(0, 48);
     if (!rows.length) return "";
-    const renderRow = row => `<div class="dictionary-example-row">${row.audioUrl ? `<button class="example-audio" type="button" data-audio-url="${esc(row.audioUrl)}" title="播放例句" aria-label="播放例句">▶</button>` : ""}<div><div class="dictionary-example-en">${esc(row.example)}</div>${row.translation ? `<div class="dictionary-example-zh">${esc(row.translation)}</div>` : ""}${row.source ? `<small class="example-source">${esc(row.source)}</small>` : ""}</div></div>`;
+    const renderRow = row => `<div class="dictionary-example-row">${row.audioUrl ? `<button class="example-audio" type="button" data-audio-url="${esc(row.audioUrl)}" title="播放例句" aria-label="播放例句">▶</button>` : ""}<div class="dictionary-example-content"><div class="dictionary-example-en">${esc(row.example)}</div>${row.translation ? `<div class="dictionary-example-zh">${esc(row.translation)}</div>` : ""}${row.source ? `<small class="example-source">${esc(row.source)}</small>` : ""}</div></div>`;
     const visibleRows = rows.slice(0, 5).map(renderRow).join("");
     const remainingRows = rows.slice(5);
     const more = remainingRows.length

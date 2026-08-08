@@ -294,6 +294,13 @@ test("filters Youdao word-alignment rows from bilingual examples", () => {
   assert.deepEqual(entry.examples.map(row => row.example), ["A happy little dog decided to visit this place."]);
 });
 
+test("keeps no-audio dictionary examples in the wide content column", async () => {
+  const renderer = await fs.readFile(path.join(__dirname, "..", "src", "renderer", "renderer.js"), "utf8");
+  const styles = await fs.readFile(path.join(__dirname, "..", "src", "renderer", "styles.css"), "utf8");
+  assert.match(renderer, /class="dictionary-example-content"/);
+  assert.match(styles, /\.dictionary-example-content\s*\{[^}]*grid-column:\s*2;/);
+});
+
 test("normalizes Youdao web sentence translation", () => {
   const result = normalizeYoudaoTranslation({
     fanyi: {
