@@ -123,6 +123,69 @@ async function main() {
     if (noAudio.visualLines > 3) {
       throw new Error(`No-audio example still wraps excessively: ${JSON.stringify(noAudio)}`);
     }
+
+    const conciseResult = await client.send("Runtime.evaluate", {
+      expression: `(() => {
+        const entry = document.querySelector(".dictionary-entry");
+        if (!entry) return null;
+        return {
+          groups: [...entry.querySelectorAll(":scope > .meaning-group")].map(group => ({
+            heading: group.querySelector(".meaning-heading strong")?.textContent?.trim() || "",
+            translation: group.querySelector(".sense-translation")?.textContent?.trim() || ""
+          })),
+          containsPlaceholder: entry.textContent.includes("暂无英文释义")
+        };
+      })()`,
+      returnByValue: true
+    });
+    const concise = conciseResult.result?.value;
+    if (!concise || concise.groups.length !== 3) {
+      throw new Error(`Expected the 3 Youdao concise rows for happy: ${JSON.stringify(concise)}`);
+    }
+    if (concise.groups.some(group => group.heading === "其他释义") || concise.groups.filter(group => group.heading === "【名】").length !== 1) {
+      throw new Error(`Happy still contains a duplicate other/named meaning: ${JSON.stringify(concise)}`);
+    }
+    if (concise.containsPlaceholder) {
+      throw new Error(`Youdao concise rows still render the empty English-definition placeholder: ${JSON.stringify(concise)}`);
+    }
+
+    const cacheBeforeResult = await client.send("Runtime.evaluate", {
+      expression: `window.medict.getDrugCacheStats()`,
+      awaitPromise: true,
+      returnByValue: true
+    });
+    const drugCacheBefore = Number(cacheBeforeResult.result?.value?.count || 0);
+    await client.send("Runtime.evaluate", {
+      expression: `window.medict.lookupSelection("happy")`,
+      awaitPromise: true,
+      returnByValue: true
+    });
+    await delay(400);
+    const selectionResult = await client.send("Runtime.evaluate", {
+      expression: `(async () => ({
+        headings: [...document.querySelectorAll(".result-block > .result-block-heading .heading-label")].map(item => item.textContent.trim()),
+        status: document.querySelector("#request-status")?.textContent?.trim() || "",
+        hasDrugText: document.querySelector("#results")?.innerText?.includes("未找到该药物") || false,
+        drugCacheCount: Number((await window.medict.getDrugCacheStats())?.count || 0)
+      }))()`,
+      awaitPromise: true,
+      returnByValue: true
+    });
+    const selection = selectionResult.result?.value || {};
+    if (selection.headings?.join(",") !== "WORD" || selection.hasDrugText || selection.drugCacheCount !== drugCacheBefore) {
+      throw new Error(`Selection lookup still rendered a drug result: ${JSON.stringify(selection)}`);
+    }
+
+    await client.send("Runtime.evaluate", {
+      expression: `document.querySelector("#results").scrollTop = 0`,
+      returnByValue: true
+    });
+    await delay(300);
+    const conciseScreenshot = await client.send("Page.captureScreenshot", { format: "png" });
+    const conciseScreenshotPath = path.resolve("artifacts", "selection-word-only-check.png");
+    await fs.mkdir(path.dirname(conciseScreenshotPath), { recursive: true });
+    await fs.writeFile(conciseScreenshotPath, Buffer.from(conciseScreenshot.data, "base64"));
+
     await client.send("Runtime.evaluate", {
       expression: `document.querySelector(".dictionary-extra")?.scrollIntoView({ block: "start" })`,
       returnByValue: true
@@ -132,7 +195,7 @@ async function main() {
     const screenshotPath = path.resolve("artifacts", "example-layout-check.png");
     await fs.mkdir(path.dirname(screenshotPath), { recursive: true });
     await fs.writeFile(screenshotPath, Buffer.from(screenshot.data, "base64"));
-    console.log(JSON.stringify({ rows, screenshotPath }, null, 2));
+    console.log(JSON.stringify({ rows, concise, selection, conciseScreenshotPath, screenshotPath }, null, 2));
   } finally {
     client?.close();
     child.kill();

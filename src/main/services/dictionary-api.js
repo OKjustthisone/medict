@@ -455,15 +455,35 @@ function youdaoCollinsSenses(data) {
 
 function youdaoBasicSenses(data) {
   const rows = Array.isArray(data?.ec?.word?.trs) ? data.ec.word.trs : [];
-  return rows.map(row => ({
-    partOfSpeech: normalizeYoudaoPartOfSpeech(row?.pos || row?.part),
-    definition: "",
-    translations: unique(valuesFromYoudao(row?.tran || row?.translation || row?.word)),
-    examples: [],
-    exampleTranslations: [],
-    synonyms: youdaoSynonymValues(data, row?.pos || row?.part),
-    antonyms: []
-  })).filter(sense => sense.translations.length);
+  return rows.map(row => {
+    const rawPartOfSpeech = clean(row?.pos || row?.part);
+    let translations = unique(valuesFromYoudao(row?.tran || row?.translation || row?.word));
+    let partOfSpeech = normalizeYoudaoPartOfSpeech(rawPartOfSpeech);
+
+    // The concise Youdao section puts labels such as `【名】` at the start of
+    // the translation instead of in `pos`. Treat that label as the heading so
+    // the same row is not rendered once as "其他释义" and again as `【名】`.
+    if (!partOfSpeech && translations.length) {
+      const labelMatch = translations[0].match(/^【([^】]+)】\s*/);
+      if (labelMatch) {
+        partOfSpeech = `【${labelMatch[1]}】`;
+        translations = [
+          translations[0].slice(labelMatch[0].length),
+          ...translations.slice(1)
+        ].map(clean).filter(Boolean);
+      }
+    }
+
+    return {
+      partOfSpeech,
+      definition: "",
+      translations,
+      examples: [],
+      exampleTranslations: [],
+      synonyms: youdaoSynonymValues(data, rawPartOfSpeech),
+      antonyms: []
+    };
+  }).filter(sense => sense.translations.length);
 }
 
 function youdaoExpandedSenses(data) {
@@ -524,6 +544,9 @@ function youdaoDictionaryExamples(data) {
     translation: sentence?.zh,
     source: sentence?.type
   })) : []));
+  add(data?.collins_primary?.gramcat?.flatMap(gramcat =>
+    (gramcat?.senses || []).flatMap(sense => sense?.examples || [])
+  ));
   add(data?.blng_sents_part?.["sentence-pair"]);
   add(data?.individual?.pastExamSents?.map(row => ({
     example: row?.en,
@@ -618,11 +641,19 @@ function normalizeYoudaoDictionary(data, query) {
   const audioUrl = phonetics.find(item => item.audioUrl)?.audioUrl || firstGramcat?.audiourl || "";
   const gramcats = Array.isArray(data?.collins_primary?.gramcat) ? data.collins_primary.gramcat : [];
   const expandedWords = Array.isArray(data?.expand_ec?.word) ? data.expand_ec.word : [];
+  // Match the website's concise definition panel. `ec.word.trs` is the source
+  // used by that panel; Collins, expanded EC and EE are alternative dictionary
+  // sections, not additional rows to stack underneath it. Keep them as ordered
+  // fallbacks for responses where the concise section is absent.
+  const senseCandidates = [
+    youdaoBasicSenses(data),
+    youdaoCollinsSenses(data),
+    youdaoExpandedSenses(data),
+    youdaoWordnetSenses(data)
+  ];
+  const primarySenses = senseCandidates.find(rows => rows.length) || [];
   const senses = [];
-  for (const sense of youdaoCollinsSenses(data)) appendYoudaoSense(senses, sense);
-  for (const sense of youdaoBasicSenses(data)) appendYoudaoSense(senses, sense);
-  for (const sense of youdaoExpandedSenses(data)) appendYoudaoSense(senses, sense);
-  for (const sense of youdaoWordnetSenses(data)) appendYoudaoSense(senses, sense);
+  for (const sense of primarySenses) appendYoudaoSense(senses, sense);
   const directTranslations = unique(data?.ec?.web_trans);
   if (!senses.length && directTranslations.length) {
     appendYoudaoSense(senses, {

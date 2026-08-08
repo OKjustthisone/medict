@@ -163,7 +163,7 @@ test("normalizes Free Dictionary phonetics, parts of speech, homographs and exam
   assert.equal(entry.source.license, "CC BY-SA 3.0");
 });
 
-test("normalizes the Youdao web dictionary into phonetics, senses, forms and bilingual examples", () => {
+test("uses the Youdao webpage concise rows as the canonical meanings", () => {
   const entry = normalizeYoudaoDictionary({
     ec: {
       word: {
@@ -172,7 +172,11 @@ test("normalizes the Youdao web dictionary into phonetics, senses, forms and bil
         usphone: "fæn",
         ukspeech: "fan",
         usspeech: "fan",
-        trs: [{ pos: "n.", tran: "风扇" }],
+        trs: [
+          { pos: "n.", tran: "风扇；粉丝；爱好者" },
+          { pos: "v.", tran: "给……扇风" },
+          { tran: "【名】 （Fan）（英）范（人名）" }
+        ],
         wfs: [{ wf: { name: "过去式", value: "fanned" } }]
       }
     },
@@ -211,12 +215,18 @@ test("normalizes the Youdao web dictionary into phonetics, senses, forms and bil
   assert.equal(entry.audioUrl, "https://dict.youdao.com/dictvoice?audio=fan");
   assert.deepEqual(entry.wordForms, [{ label: "过去式", values: ["fanned"] }]);
   assert.equal(entry.senses.length, 3);
-  assert.ok(entry.senses.some(sense => sense.translations.includes("粉丝；爱好者")));
-  assert.deepEqual(entry.senses[0].exampleTranslations, ["他是这个乐队的粉丝。"]);
+  assert.deepEqual(entry.senses.map(sense => sense.partOfSpeech), ["noun", "verb", "【名】"]);
+  assert.deepEqual(entry.senses.map(sense => sense.translations), [
+    ["风扇；粉丝；爱好者"],
+    ["给……扇风"],
+    ["（Fan）（英）范（人名）"]
+  ]);
+  assert.ok(entry.senses.every(sense => !sense.definition));
+  assert.ok(entry.examples.some(row => row.translation === "他是这个乐队的粉丝。"));
   assert.ok(entry.senses[0].synonyms.includes("admirer"));
 });
 
-test("keeps Youdao expanded meanings, sentence corpus, phrases and related words", () => {
+test("keeps Youdao examples and related data without stacking alternative meaning sections", () => {
   const entry = normalizeYoudaoDictionary({
     ec: {
       word: {
@@ -266,12 +276,56 @@ test("keeps Youdao expanded meanings, sentence corpus, phrases and related words
     rel_word: { rels: [{ rel: { pos: "adj.", words: [{ word: "mousy", tran: "像老鼠的" }] } }] },
     ee: { word: { trs: [{ pos: "v.", tr: [{ tran: "manipulate the mouse of a computer" }] }] } }
   }, "mouse");
-  assert.ok(entry.senses.some(sense => sense.translations.includes("鼠标")));
-  assert.ok(entry.senses.some(sense => sense.definition.includes("manipulate the mouse")));
+  assert.equal(entry.senses.length, 1);
+  assert.deepEqual(entry.senses[0].translations, ["老鼠；鼠标；安静害羞的人"]);
+  assert.equal(entry.senses[0].definition, "");
   assert.ok(entry.examples.some(row => row.translation === "用鼠标拖动图标。"));
   assert.deepEqual(entry.phrases, [{ phrase: "mouse button", translations: ["鼠标按钮"] }]);
   assert.equal(entry.relatedWords[0].word, "mousy");
   assert.ok(entry.tags.includes("CET4"));
+});
+
+test("keeps a single named-person row for happy instead of duplicate other meanings", () => {
+  const entry = normalizeYoudaoDictionary({
+    ec: {
+      word: {
+        word: "happy",
+        trs: [
+          { pos: "adj.", tran: "快乐的；幸福的" },
+          { pos: "comb.", tran: "<非正式>滥用……的" },
+          { tran: "【名】 （Happy）（英、瑞典、喀）哈皮（人名）" }
+        ]
+      }
+    },
+    collins_primary: {
+      gramcat: [{ partofspeech: "adjective", senses: [{ word: "快乐的；幸福的" }] }]
+    },
+    expand_ec: {
+      word: [{ transList: [{ trans: "【名】 （Happy）（英、瑞典、喀）哈皮（人名）" }] }]
+    }
+  }, "happy");
+
+  assert.deepEqual(entry.senses.map(sense => sense.partOfSpeech), ["adjective", "comb.", "【名】"]);
+  assert.deepEqual(entry.senses[2].translations, ["（Happy）（英、瑞典、喀）哈皮（人名）"]);
+  assert.equal(entry.senses.filter(sense => sense.partOfSpeech === "【名】").length, 1);
+  assert.equal(entry.senses.filter(sense => !sense.partOfSpeech).length, 0);
+});
+
+test("falls back to Collins meanings when Youdao has no concise section", () => {
+  const entry = normalizeYoudaoDictionary({
+    ec: { word: { word: "fallback", trs: [] } },
+    collins_primary: {
+      gramcat: [{
+        partofspeech: "noun",
+        senses: [{ definition: "a backup choice", word: "备选方案" }]
+      }]
+    }
+  }, "fallback");
+
+  assert.equal(entry.senses.length, 1);
+  assert.equal(entry.senses[0].partOfSpeech, "noun");
+  assert.equal(entry.senses[0].definition, "a backup choice");
+  assert.deepEqual(entry.senses[0].translations, ["备选方案"]);
 });
 
 test("filters Youdao word-alignment rows from bilingual examples", () => {
@@ -299,6 +353,17 @@ test("keeps no-audio dictionary examples in the wide content column", async () =
   const styles = await fs.readFile(path.join(__dirname, "..", "src", "renderer", "styles.css"), "utf8");
   assert.match(renderer, /class="dictionary-example-content"/);
   assert.match(styles, /\.dictionary-example-content\s*\{[^}]*grid-column:\s*2;/);
+});
+
+test("selection lookup requests only the word pipeline", async () => {
+  const mainSource = await fs.readFile(path.join(__dirname, "..", "src", "main", "main.js"), "utf8");
+  const rendererSource = await fs.readFile(path.join(__dirname, "..", "src", "renderer", "renderer.js"), "utf8");
+  const mainSelection = mainSource.match(/async function runSelectionLookup[\s\S]*?(?=\nasync function runShortcutLookup)/)?.[0] || "";
+  const rendererSelection = rendererSource.match(/api\.onSelectionPending[\s\S]*?(?=\n\s*api\.onSelectionEmpty)/)?.[0] || "";
+
+  assert.match(mainSelection, /runWordLookup\(query\)/);
+  assert.doesNotMatch(mainSelection, /runDrugLookup|drugResult|\bdrug:/);
+  assert.doesNotMatch(rendererSelection, /DRUG|payload\.drug|未找到该药物/);
 });
 
 test("normalizes Youdao web sentence translation", () => {

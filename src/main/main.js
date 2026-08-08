@@ -198,19 +198,14 @@ async function runSelectionLookup(rawText, options = {}) {
   const requestId = ++selectionRequestId;
   showNearCursor({ focus: Boolean(options.focus) });
   sendToRenderer("selection:pending", { query, requestId });
-  const [wordResult, drugResult] = await Promise.allSettled([
-    runWordLookup(query),
-    runDrugLookup(query)
-  ]);
+  const [wordResult] = await Promise.allSettled([runWordLookup(query)]);
   if (requestId !== selectionRequestId) return;
   sendToRenderer("selection:result", {
     query,
     requestId,
     word: wordResult.status === "fulfilled" ? wordResult.value : null,
-    drug: drugResult.status === "fulfilled" ? drugResult.value : null,
     errors: {
-      word: wordResult.status === "rejected" ? String(wordResult.reason?.message || wordResult.reason) : "",
-      drug: drugResult.status === "rejected" ? String(drugResult.reason?.message || drugResult.reason) : ""
+      word: wordResult.status === "rejected" ? String(wordResult.reason?.message || wordResult.reason) : ""
     }
   });
 }

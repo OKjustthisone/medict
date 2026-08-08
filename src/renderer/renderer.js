@@ -217,7 +217,7 @@
     const localMessage = localCount
       ? `已加载 ${localCount.toLocaleString()} 条本地词条；精确命中时不会访问云端。`
       : "当前未安装本地词典；英文单词会查完整在线词典，短语和句子会自动翻译。";
-    $("#results").innerHTML = `<div class="empty-state"><div><span class="empty-state-icon" aria-hidden="true"><svg viewBox="0 0 64 64"><rect x="2" y="2" width="60" height="60" rx="16" fill="#4c72e8"/><g fill="none" stroke="#fff" stroke-linecap="round" stroke-width="3.1" opacity=".94"><ellipse cx="32" cy="32" rx="23" ry="9"/><ellipse cx="32" cy="32" rx="23" ry="9" transform="rotate(60 32 32)"/><ellipse cx="32" cy="32" rx="23" ry="9" transform="rotate(-60 32 32)"/></g><circle cx="32" cy="32" r="6.5" fill="#e9fbff"/><circle cx="32" cy="32" r="3.5" fill="#27a9d4"/></svg></span><strong>一个输入框，两种查询</strong><p>${esc(localMessage)} 鼠标划词时，两种查询会同时执行。</p></div></div>`;
+    $("#results").innerHTML = `<div class="empty-state"><div><span class="empty-state-icon" aria-hidden="true"><svg viewBox="0 0 64 64"><rect x="2" y="2" width="60" height="60" rx="16" fill="#4c72e8"/><g fill="none" stroke="#fff" stroke-linecap="round" stroke-width="3.1" opacity=".94"><ellipse cx="32" cy="32" rx="23" ry="9"/><ellipse cx="32" cy="32" rx="23" ry="9" transform="rotate(60 32 32)"/><ellipse cx="32" cy="32" rx="23" ry="9" transform="rotate(-60 32 32)"/></g><circle cx="32" cy="32" r="6.5" fill="#e9fbff"/><circle cx="32" cy="32" r="3.5" fill="#27a9d4"/></svg></span><strong>一个输入框，两种查询</strong><p>${esc(localMessage)} 鼠标划词只执行普通查词；药物数据仅在点击“药物查询”时请求。</p></div></div>`;
   }
 
   function loadingBlock(label, query) {
@@ -225,9 +225,7 @@
   }
 
   function showLoading(mode, query) {
-    const blocks = mode === "selection"
-      ? `${loadingBlock("WORD", query)}${loadingBlock("DRUG", query)}`
-      : loadingBlock(mode === "drug" ? "DRUG" : "WORD", query);
+    const blocks = loadingBlock(mode === "drug" ? "DRUG" : "WORD", query);
     $("#results").innerHTML = `<div class="result-stack">${blocks}</div>`;
     $("#results").scrollTop = 0;
   }
@@ -328,8 +326,8 @@
     const antonyms = [...new Set(senses.flatMap(sense => values(sense.antonyms).map(clean)).filter(Boolean))];
     const definitionRows = definitions.length
       ? `<div class="meaning-definitions">${definitions.map((definition, index) => `<div class="meaning-definition"><span>${index + 1}</span><span>${esc(definition)}</span></div>`).join("")}</div>`
-      : `<div class="definition">暂无英文释义</div>`;
-    return `<section class="meaning-group"><div class="meaning-heading"><strong>${esc(partOfSpeechLabel(group.partOfSpeech))}</strong><span>${senses.length} 个义项</span></div><div class="sense meaning-summary"><span class="meaning-bullet">•</span><div class="sense-copy">${translations.length ? `<div class="sense-translation">${translations.map(esc).join("；")}</div>` : ""}${definitionRows}${notes.map(note => `<div class="sense-note">${esc(note)}</div>`).join("")}${renderRelated("近义", synonyms)}${renderRelated("反义", antonyms)}<div class="sense-footer">${copyButton("sense", "复制本词性释义")}</div></div></div></section>`;
+      : "";
+    return `<section class="meaning-group"><div class="meaning-heading"><strong>${esc(partOfSpeechLabel(group.partOfSpeech))}</strong></div><div class="sense meaning-summary"><span class="meaning-bullet">•</span><div class="sense-copy">${translations.length ? `<div class="sense-translation">${translations.map(esc).join("；")}</div>` : ""}${definitionRows}${notes.map(note => `<div class="sense-note">${esc(note)}</div>`).join("")}${renderRelated("近义", synonyms)}${renderRelated("反义", antonyms)}<div class="sense-footer">${copyButton("sense", "复制本词性释义")}</div></div></div></section>`;
   }
 
   function renderDictionaryExamples(examples) {
@@ -863,13 +861,13 @@
       setActiveMode("selection");
       $("#query-input").value = payload.query;
       setBusy(false);
-      setRequestStatus("划词：查词与药物查询并行执行中…");
+      setRequestStatus("划词：正在查询词典与翻译…");
       showLoading("selection", payload.query);
     });
     api.onSelectionResult(payload => {
       if (state.activeSelectionRequestId !== payload.requestId) return;
-      renderResults({ word: payload.word, drug: payload.drug, errors: payload.errors || {} });
-      setRequestStatus(payload.drug?.success ? "划词查询完成 · 已匹配药物" : "划词查询完成 · 未找到该药物");
+      renderResults({ word: payload.word, errors: { word: payload.errors?.word || "" } });
+      setRequestStatus("划词查词完成");
     });
     api.onSelectionEmpty(payload => {
       state.activeSelectionRequestId = null;
