@@ -6,10 +6,10 @@ const test = require("node:test");
 const { DictionaryManager, normalizeEntry, parseCsv } = require("../src/main/dictionary-manager");
 const { DrugCache, normalizeDrugCacheKey, SEVEN_DAYS_MS } = require("../src/main/drug-cache");
 const { normalizeAccelerator, registerShortcutConfiguration, validateShortcutConfiguration } = require("../src/main/shortcut-manager");
-const { buildYoudaoDictionaryPayload, normalizeFreeDictionary, normalizeMerriamItem, normalizeYoudaoDictionary, normalizeYoudaoTranslation } = require("../src/main/services/dictionary-api");
+const { buildYoudaoDictionaryPayload, normalizeFreeDictionary, normalizeMerriamItem, normalizeYoudaoDictionary, normalizeYoudaoLegacyPayload, normalizeYoudaoTranslation } = require("../src/main/services/dictionary-api");
 const { chooseChemblCandidate, hasDrugIdentity } = require("../src/main/services/drugshop");
 const { parseSelectionLine } = require("../src/main/selection-monitor");
-const { lookupWord, sortByServiceOrder } = require("../src/main/services/word-lookup");
+const { lookupWord, requestLanguagePair, sortByServiceOrder } = require("../src/main/services/word-lookup");
 const { createBaiduError, normalizeBaiduDictionary, targetForBaidu } = require("../src/main/services/translation");
 const { mergeSettings, normalizeDictionaryServiceOrder } = require("../src/main/store");
 
@@ -226,6 +226,54 @@ test("uses the Youdao webpage concise rows as the canonical meanings", () => {
   assert.ok(entry.senses[0].synonyms.includes("admirer"));
 });
 
+test("normalizes the compact Youdao response into dual UK and US pronunciation controls", () => {
+  const compact = normalizeYoudaoLegacyPayload({
+    ec: {
+      exam_type: ["CET6", "TOEFL"],
+      word: [{
+        ukphone: "ˈhæpi",
+        usphone: "ˈhæpi",
+        ukspeech: "happy&type=1",
+        usspeech: "happy&type=2",
+        "return-phrase": { l: { i: "happy" } },
+        trs: [
+          { tr: [{ l: { i: ["adj. 快乐的；幸福的"] } }] },
+          { tr: [{ l: { i: ["【名】 （Happy）哈皮（人名）"] } }] }
+        ]
+      }]
+    }
+  }, "happy", "en");
+  const entry = normalizeYoudaoDictionary(compact, "happy");
+
+  assert.equal(entry.meta.api, "web-v2-fast");
+  assert.deepEqual(entry.phonetics.map(row => row.label), ["英", "美"]);
+  assert.match(entry.phonetics[0].audioUrl, /type=1$/);
+  assert.match(entry.phonetics[1].audioUrl, /type=2$/);
+  assert.deepEqual(entry.senses.map(row => row.partOfSpeech), ["adjective", "【名】"]);
+  assert.deepEqual(entry.tags, ["CET6", "TOEFL"]);
+});
+
+test("normalizes a compact Chinese-to-English Youdao dictionary response", () => {
+  const compact = normalizeYoudaoLegacyPayload({
+    ce: {
+      word: [{
+        phone: "kuài lè",
+        "return-phrase": { l: { i: "快乐" } },
+        trs: [
+          { tr: [{ l: { pos: "adj.", i: ["", { "#text": "happy" }], "#tran": "快乐的；幸福的" } }] },
+          { tr: [{ l: { pos: "n.", i: ["", { "#text": "happiness" }], "#tran": "快乐；幸福" } }] }
+        ]
+      }]
+    }
+  }, "快乐", "en");
+  const entry = normalizeYoudaoDictionary(compact, "快乐");
+
+  assert.equal(entry.word, "快乐");
+  assert.equal(entry.phonetics[0].label, "拼音");
+  assert.deepEqual(entry.senses.map(row => row.partOfSpeech), ["adjective", "noun"]);
+  assert.deepEqual(entry.senses.map(row => row.translations[0]), ["happy", "happiness"]);
+});
+
 test("keeps Youdao examples and related data without stacking alternative meaning sections", () => {
   const entry = normalizeYoudaoDictionary({
     ec: {
@@ -355,13 +403,30 @@ test("keeps no-audio dictionary examples in the wide content column", async () =
   assert.match(styles, /\.dictionary-example-content\s*\{[^}]*grid-column:\s*2;/);
 });
 
+test("renders language controls, query history, dual pronunciations and balanced dictionary typography", async () => {
+  const html = await fs.readFile(path.join(__dirname, "..", "src", "renderer", "index.html"), "utf8");
+  const renderer = await fs.readFile(path.join(__dirname, "..", "src", "renderer", "renderer.js"), "utf8");
+  const styles = await fs.readFile(path.join(__dirname, "..", "src", "renderer", "styles.css"), "utf8");
+
+  assert.match(html, /id="source-language"/);
+  assert.match(html, /id="target-language"/);
+  assert.match(html, /id="swap-languages-button"/);
+  assert.match(html, /id="history-button"/);
+  assert.match(html, /id="history-popover"/);
+  assert.match(renderer, /function renderPronunciations/);
+  assert.match(renderer, /HISTORY_STORAGE_KEY/);
+  assert.match(styles, /\.detail-heading,[\s\S]*\.dictionary-extra summary,[\s\S]*font-size:\s*var\(--font-12/);
+  assert.match(styles, /\.dictionary-tags span\s*\{\s*font-size:\s*var\(--font-10/);
+  assert.match(styles, /\.dictionary-example-en\s*\{\s*font-size:\s*var\(--font-12/);
+});
+
 test("selection lookup requests only the word pipeline", async () => {
   const mainSource = await fs.readFile(path.join(__dirname, "..", "src", "main", "main.js"), "utf8");
   const rendererSource = await fs.readFile(path.join(__dirname, "..", "src", "renderer", "renderer.js"), "utf8");
   const mainSelection = mainSource.match(/async function runSelectionLookup[\s\S]*?(?=\nasync function runShortcutLookup)/)?.[0] || "";
   const rendererSelection = rendererSource.match(/api\.onSelectionPending[\s\S]*?(?=\n\s*api\.onSelectionEmpty)/)?.[0] || "";
 
-  assert.match(mainSelection, /runWordLookup\(query\)/);
+  assert.match(mainSelection, /runWordLookup\(query,/);
   assert.doesNotMatch(mainSelection, /runDrugLookup|drugResult|\bdrug:/);
   assert.doesNotMatch(rendererSelection, /DRUG|payload\.drug|未找到该药物/);
 });
@@ -378,6 +443,47 @@ test("normalizes Youdao web sentence translation", () => {
   assert.equal(result.provider, "youdao-web");
   assert.equal(result.detectedSource, "en");
   assert.deepEqual(result.translations, ["我点击了鼠标。"]);
+});
+
+test("automatically reverses a same-language auto target for Chinese input", () => {
+  assert.deepEqual(requestLanguagePair("快乐", mergeSettings({}), {}), { source: "auto", target: "en" });
+  assert.deepEqual(requestLanguagePair("happy", mergeSettings({ translation: { source: "auto", target: "en" } }), {}), { source: "auto", target: "zh-CN" });
+  assert.deepEqual(requestLanguagePair("快乐", mergeSettings({}), { source: "zh-CN", target: "en" }), { source: "zh-CN", target: "en" });
+});
+
+test("publishes the Youdao dictionary result before slower supplemental services finish", async () => {
+  let resolveFreeDictionary;
+  let resolveCloud;
+  const partials = [];
+  const freeDictionary = new Promise(resolve => { resolveFreeDictionary = resolve; });
+  const cloud = new Promise(resolve => { resolveCloud = resolve; });
+  const lookup = lookupWord("happy", {
+    dictionaryManager: {
+      searchLocal: async () => ({ exactResults: [], suggestions: [], warnings: [], sources: [] })
+    },
+    settings: mergeSettings({}),
+    queryYoudaoDictionary: async () => ({
+      type: "online-dictionary",
+      provider: "youdao-dictionary",
+      name: "网易有道词典",
+      word: "happy",
+      senses: [{ partOfSpeech: "adjective", translations: ["快乐的"] }]
+    }),
+    queryDictionary: async () => freeDictionary,
+    translate: async () => cloud,
+    translateSegments: async () => ({ translations: [], warnings: [] }),
+    onPartial: result => partials.push(result)
+  });
+
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(partials.length, 1);
+  assert.equal(partials[0].partial, true);
+  assert.equal(partials[0].dictionaryResults[0].provider, "youdao-dictionary");
+
+  resolveFreeDictionary(null);
+  resolveCloud({ source: "en", target: "zh-CN", results: [], warnings: [] });
+  const final = await lookup;
+  assert.equal(final.partial, false);
 });
 
 test("uses an exact local dictionary hit without calling a cloud provider", async () => {

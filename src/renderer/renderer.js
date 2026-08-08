@@ -9,8 +9,11 @@
     activeSelectionRequestId: null,
     selectionStatus: { available: false, active: false, message: "正在启动自动划词" },
     pinned: false,
-    activeMode: "word"
+    activeMode: "word",
+    history: [],
+    languageSaveTimer: null
   };
+  const HISTORY_STORAGE_KEY = "medict.query-history.v1";
 
   const dictionaryServices = [
     { id: "youdaoDictionary", label: "网易有道词典 / 翻译" },
@@ -34,6 +37,89 @@
     const items = values(value).map(clean).filter(Boolean);
     return items.length ? items.join("；") : "—";
   };
+
+  function loadHistory() {
+    try {
+      const rows = JSON.parse(localStorage.getItem(HISTORY_STORAGE_KEY) || "[]");
+      if (!Array.isArray(rows)) return [];
+      return rows.map(row => ({
+        query: clean(row?.query).slice(0, 4000),
+        kind: row?.kind === "drug" ? "drug" : "word",
+        timestamp: Number(row?.timestamp) || 0
+      })).filter(row => row.query).slice(0, 10);
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function saveHistory() {
+    try {
+      localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(state.history.slice(0, 10)));
+    } catch (_) {}
+  }
+
+  function renderHistory() {
+    const list = $("#history-list");
+    if (!list) return;
+    list.innerHTML = state.history.length
+      ? state.history.map((row, index) => `<button class="history-item" type="button" data-history-index="${index}"><span class="history-query">${esc(row.query)}</span><span class="history-kind">${row.kind === "drug" ? "药物" : "查词"}</span></button>`).join("")
+      : '<div class="history-empty">还没有查询记录</div>';
+  }
+
+  function addHistory(query, kind = "word") {
+    const text = clean(query);
+    if (!text) return;
+    const normalizedKind = kind === "drug" ? "drug" : "word";
+    const key = `${normalizedKind}\u0000${text.toLowerCase()}`;
+    state.history = [
+      { query: text, kind: normalizedKind, timestamp: Date.now() },
+      ...state.history.filter(row => `${row.kind}\u0000${row.query.toLowerCase()}` !== key)
+    ].slice(0, 10);
+    saveHistory();
+    renderHistory();
+  }
+
+  function closeHistory() {
+    $("#history-popover").hidden = true;
+    $("#history-button").classList.remove("active");
+  }
+
+  function currentLanguagePair() {
+    return {
+      source: $("#source-language")?.value || state.settings?.translation?.source || "auto",
+      target: $("#target-language")?.value || state.settings?.translation?.target || "zh-CN"
+    };
+  }
+
+  function syncLanguagePair(translation = {}) {
+    const source = translation.source || "auto";
+    const target = translation.target || "zh-CN";
+    if ([...$("#source-language").options].some(option => option.value === source)) $("#source-language").value = source;
+    if ([...$("#target-language").options].some(option => option.value === target)) $("#target-language").value = target;
+    setField("translation-target", target);
+  }
+
+  function keepLanguagePairDistinct(changed) {
+    const source = $("#source-language").value;
+    const target = $("#target-language").value;
+    if (source === "auto" || source !== target) return;
+    if (changed === "source") $("#target-language").value = source === "zh-CN" ? "en" : "zh-CN";
+    else $("#source-language").value = target === "zh-CN" ? "en" : "zh-CN";
+  }
+
+  function persistLanguagePair() {
+    const pair = currentLanguagePair();
+    state.settings ||= {};
+    state.settings.translation ||= {};
+    Object.assign(state.settings.translation, pair);
+    setField("translation-target", pair.target);
+    clearTimeout(state.languageSaveTimer);
+    state.languageSaveTimer = setTimeout(() => {
+      api.saveLanguagePair(pair).then(saved => {
+        state.settings = saved;
+      }).catch(error => setRequestStatus(`语言方向保存失败：${error.message || error}`, "error"));
+    }, 180);
+  }
 
   function normalizeDictionaryServiceOrder(order) {
     const requested = Array.isArray(order) ? order : [];
@@ -389,11 +475,31 @@
     return rows.length ? `<div class="word-forms"><span class="word-forms-label">变形</span><div class="word-form-grid">${rows.join("")}</div></div>` : "";
   }
 
+  function renderPronunciations(entry) {
+    const provided = values(entry.phonetics).filter(row => row && typeof row === "object");
+    const rows = provided.length ? provided : (entry.phonetic || entry.audioUrl ? [{
+      label: "",
+      text: entry.phonetic,
+      audioUrl: entry.audioUrl
+    }] : []);
+    const seen = new Set();
+    const rendered = rows.map((row, index) => {
+      const label = clean(row.label) || (rows.length > 1 ? `发音 ${index + 1}` : "发音");
+      const text = clean(row.text);
+      const audioUrl = clean(row.audioUrl || row.audio);
+      const key = `${label}\u0000${text}\u0000${audioUrl}`;
+      if ((!text && !audioUrl) || seen.has(key)) return "";
+      seen.add(key);
+      const content = `<span class="pronunciation-label">${esc(label)}</span>${text ? `<span class="phonetic">${esc(text)}</span>` : ""}${audioUrl ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4V9Zm12.5-.8a6 6 0 0 1 0 7.6l-1.5-1.3a4 4 0 0 0 0-5l1.5-1.3Zm2.7-2.3a9 9 0 0 1 0 12.2l-1.5-1.3a7 7 0 0 0 0-9.6l1.5-1.3Z"/></svg>' : ""}`;
+      if (!audioUrl) return `<span class="pronunciation-chip">${content}</span>`;
+      const accentName = label === "英" ? "英式" : label === "美" ? "美式" : label;
+      return `<button class="pronunciation-button" type="button" data-audio-url="${esc(audioUrl)}" title="播放${esc(accentName)}发音" aria-label="播放${esc(accentName)}发音">${content}</button>`;
+    }).filter(Boolean);
+    return rendered.length ? `<div class="pronunciation-list">${rendered.join("")}</div>` : "";
+  }
+
   function renderDictionaryEntry(entry) {
     const groups = groupSenses(entry.senses);
-    const audio = entry.audioUrl
-      ? `<button class="audio-button" type="button" data-audio-url="${esc(entry.audioUrl)}" title="播放发音" aria-label="播放发音">▶</button>`
-      : "";
     const sourceUrl = entry.source?.url;
     const sourceName = entry.source?.name || entry.name || "词典来源";
     const source = sourceUrl
@@ -402,13 +508,13 @@
     const sourceMeta = entry.source
       ? `<div class="dictionary-source-row"><span>${source}${entry.source.license ? ` · ${esc(entry.source.license)}` : ""}</span></div>`
       : "";
-    return `<div class="dictionary-entry result-body"><div class="word-head"><strong>${esc(entry.word)}</strong>${entry.phonetic ? `<span class="phonetic">${esc(entry.phonetic)}</span>` : ""}${audio}</div>${renderDictionaryTags(entry.tags)}${renderWordForms(entry.wordForms)}<div class="detail-heading">详细释义</div>${groups.map(renderMeaningGroup).join("")}${renderDictionaryExamples(entry.examples)}${renderDictionaryPhrases(entry.phrases)}${renderRelatedWords(entry.relatedWords)}${renderWebTranslations(entry.webTranslations)}${sourceMeta}</div>`;
+    return `<div class="dictionary-entry result-body"><div class="word-head"><strong>${esc(entry.word)}</strong>${renderPronunciations(entry)}</div>${renderDictionaryTags(entry.tags)}${renderWordForms(entry.wordForms)}<div class="detail-heading">详细释义</div>${groups.map(renderMeaningGroup).join("")}${renderDictionaryExamples(entry.examples)}${renderDictionaryPhrases(entry.phrases)}${renderRelatedWords(entry.relatedWords)}${renderWebTranslations(entry.webTranslations)}${sourceMeta}</div>`;
   }
 
   function renderCloudResult(result) {
     const translations = values(result.translations).map(esc).join("<br>") || "服务没有返回译文";
     const provider = esc(result.name || result.provider || "云端服务");
-    const language = `${result.detectedSource ? `${esc(result.detectedSource)} → ` : ""}${esc(state.settings?.translation?.target || "zh-CN")}`;
+    const language = `${result.detectedSource ? `${esc(result.detectedSource)} → ` : ""}${esc(result.targetLanguage || currentLanguagePair().target)}`;
     const examples = values(result.examples).filter(row => row && typeof row === "object" && clean(row.example)).slice(0, 6);
     const exampleHtml = examples.length
       ? `<div class="translation-examples">${examples.map(row => `<div><span>${esc(clean(row.example))}</span>${clean(row.translation) ? `<small>${esc(row.translation)}</small>` : ""}</div>`).join("")}</div>`
@@ -598,17 +704,23 @@
     }
     const requestId = ++state.requestId;
     state.activeSelectionRequestId = null;
+    addHistory(query, kind);
+    closeHistory();
     setActiveMode(kind);
     setBusy(true);
     setRequestStatus(kind === "drug" ? "正在查询 DrugShop…" : "正在查询词典与翻译…");
     showLoading(kind, query);
     try {
-      const result = kind === "drug" ? await api.lookupDrug(query) : await api.lookupWord(query);
+      const result = kind === "drug"
+        ? await api.lookupDrug(query)
+        : await api.lookupWord(query, { ...currentLanguagePair(), requestId });
       if (requestId !== state.requestId) return;
       renderResults(kind === "drug" ? { drug: result } : { word: result });
       setRequestStatus(kind === "drug"
         ? (result.cache?.hit ? "药物结果来自 7 天缓存" : result.success ? "药物数据已返回并缓存" : "未找到该药物，结果已缓存")
-        : (result.strategy === "local"
+        : (result.cache?.hit
+          ? "查询结果已从缓存返回"
+          : result.strategy === "local"
           ? "本地词典命中"
           : result.dictionaryResults?.length
             ? "在线词典已返回"
@@ -689,7 +801,7 @@
     settings.appearance ||= {};
     settings.shortcuts ||= {};
     settings.window ||= {};
-    settings.translation.source = "auto";
+    settings.translation.source = currentLanguagePair().source;
     settings.translation.target = $("#translation-target").value || "zh-CN";
     settings.translation.google.enabled = $("#google-enabled").checked;
     settings.translation.google.mode = $("#google-mode").value || "web";
@@ -725,6 +837,32 @@
   function bindEvents() {
     $("#word-button").addEventListener("click", () => runManual("word"));
     $("#drug-button").addEventListener("click", () => runManual("drug"));
+    $("#history-button").addEventListener("click", event => {
+      event.stopPropagation();
+      const popover = $("#history-popover");
+      popover.hidden = !popover.hidden;
+      $("#history-button").classList.toggle("active", !popover.hidden);
+      if (!popover.hidden) renderHistory();
+    });
+    $("#source-language").addEventListener("change", () => {
+      keepLanguagePairDistinct("source");
+      persistLanguagePair();
+    });
+    $("#target-language").addEventListener("change", () => {
+      keepLanguagePairDistinct("target");
+      persistLanguagePair();
+    });
+    $("#swap-languages-button").addEventListener("click", () => {
+      const { source, target } = currentLanguagePair();
+      if (source === "auto") {
+        $("#source-language").value = target;
+        $("#target-language").value = target === "zh-CN" ? "en" : "zh-CN";
+      } else {
+        $("#source-language").value = target;
+        $("#target-language").value = source;
+      }
+      persistLanguagePair();
+    });
     $("#clear-button").addEventListener("click", () => {
       state.requestId += 1;
       state.activeSelectionRequestId = null;
@@ -733,6 +871,7 @@
       $("#query-input").value = "";
       setRequestStatus("");
       renderIdle();
+      closeHistory();
       $("#query-input").focus();
     });
     $("#query-input").addEventListener("keydown", event => {
@@ -740,7 +879,10 @@
         event.preventDefault();
         runManual(event.ctrlKey ? "drug" : "word");
       }
-      if (event.key === "Escape") api.hideWindow();
+      if (event.key === "Escape") {
+        if (!$("#history-popover").hidden) closeHistory();
+        else api.hideWindow();
+      }
     });
 
     $("#settings-button").addEventListener("click", () => { void openSettings(); });
@@ -797,6 +939,7 @@
       try {
         state.settings = await api.saveSettings(next);
         applyFontScale(state.settings.appearance?.fontScale);
+        syncLanguagePair(state.settings.translation);
         $("#settings-status").textContent = "已保存";
         setTimeout(() => {
           if ($("#settings-dialog").open) $("#settings-dialog").close();
@@ -817,6 +960,16 @@
     });
 
     document.addEventListener("click", event => {
+      const historyItem = event.target.closest("[data-history-index]");
+      if (historyItem) {
+        const row = state.history[Number(historyItem.dataset.historyIndex)];
+        if (!row) return;
+        $("#query-input").value = row.query;
+        closeHistory();
+        runManual(row.kind);
+        return;
+      }
+      if (!event.target.closest("#history-popover") && !event.target.closest("#history-button")) closeHistory();
       const expandExamples = event.target.closest("[data-expand-examples]");
       if (expandExamples) {
         const more = expandExamples.parentElement?.querySelector(".dictionary-example-more");
@@ -860,6 +1013,8 @@
       state.activeSelectionRequestId = payload.requestId;
       setActiveMode("selection");
       $("#query-input").value = payload.query;
+      addHistory(payload.query, "word");
+      closeHistory();
       setBusy(false);
       setRequestStatus("划词：正在查询词典与翻译…");
       showLoading("selection", payload.query);
@@ -867,7 +1022,13 @@
     api.onSelectionResult(payload => {
       if (state.activeSelectionRequestId !== payload.requestId) return;
       renderResults({ word: payload.word, errors: { word: payload.errors?.word || "" } });
-      setRequestStatus("划词查词完成");
+      setRequestStatus(payload.partial ? "有道词典已返回 · 补充服务加载中…" : "划词查词完成");
+    });
+    api.onWordPartial(payload => {
+      if (Number(payload.requestId) !== state.requestId || state.activeMode !== "word") return;
+      renderResults({ word: payload.result });
+      setBusy(false);
+      setRequestStatus("有道词典已返回 · 补充服务加载中…");
     });
     api.onSelectionEmpty(payload => {
       state.activeSelectionRequestId = null;
@@ -895,7 +1056,10 @@
       state.settings = settings;
       state.sources = sources;
       state.pinned = pinned;
+      state.history = loadHistory();
       applyFontScale(settings.appearance?.fontScale);
+      syncLanguagePair(settings.translation);
+      renderHistory();
       setActiveMode("word");
       $("#pin-button").classList.toggle("active", pinned);
       updateSelectionStatus(selectionStatus);

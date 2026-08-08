@@ -10,8 +10,14 @@ const SYSTEM_NETWORK_HOSTS = new Set([
 ]);
 const MAX_FREE_DICTIONARY_SENSES = 36;
 const YOUDAO_DICTIONARY_URL = "https://dict.youdao.com/jsonapi_s?doctype=json&jsonversion=4";
-const YOUDAO_DICTIONARY_HOME = "https://dict.youdao.com/";
+const YOUDAO_DICTIONARY_FAST_URL = "https://dict.youdao.com/jsonapi";
+const YOUDAO_TRANSLATION_HOME = "https://fanyi.youdao.com/";
 const YOUDAO_WEB_CLIENT_KEY = "Mk6hqtUp33DGGtoS63tTJbMUYjRrG1Lu";
+const YOUDAO_FAST_SECTIONS = [
+  "web_trans", "ec", "ce", "simple", "phrs", "syno", "collins_primary",
+  "rel_word", "blng_sents_part", "auth_sents_part", "expand_ec", "meta"
+];
+const YOUDAO_FOREIGN_LANGUAGES = new Set(["en", "ja", "ko", "fr"]);
 const MAX_YOUDAO_SENSES = 72;
 const MAX_YOUDAO_EXAMPLES = 48;
 const MAX_YOUDAO_PHRASES = 32;
@@ -85,6 +91,34 @@ function stripMarkup(value) {
 
 function isEnglishDictionaryQuery(value) {
   return /^[a-z][a-z'-]{0,63}$/i.test(clean(value));
+}
+
+function isChineseDictionaryQuery(value) {
+  return /^[\p{Script=Han}]{1,16}$/u.test(clean(value));
+}
+
+function normalizeLanguageCode(value) {
+  const language = clean(value).toLowerCase();
+  if (["zh", "zh-cn", "zh-chs", "zh-hans"].includes(language)) return "zh-CN";
+  if (["en-us", "en-gb"].includes(language)) return "en";
+  return language || "auto";
+}
+
+function youdaoForeignLanguage(query, options = {}) {
+  if (clean(options.le || options.language)) return clean(options.le || options.language).toLowerCase();
+  const source = normalizeLanguageCode(options.source || "auto");
+  const target = normalizeLanguageCode(options.target || "zh-CN");
+  if (source === "zh-CN" && YOUDAO_FOREIGN_LANGUAGES.has(target)) return target;
+  if (target === "zh-CN" && YOUDAO_FOREIGN_LANGUAGES.has(source)) return source;
+  if (isChineseDictionaryQuery(query) && YOUDAO_FOREIGN_LANGUAGES.has(target)) return target;
+  return "en";
+}
+
+function isYoudaoDictionaryQuery(value, options = {}) {
+  const text = clean(value);
+  if (isEnglishDictionaryQuery(text) || isChineseDictionaryQuery(text)) return true;
+  const foreignLanguage = youdaoForeignLanguage(text, options);
+  return YOUDAO_FOREIGN_LANGUAGES.has(foreignLanguage) && /^[\p{L}][\p{L}'’\-]{0,63}$/u.test(text);
 }
 
 function absoluteHttpsUrl(value) {
@@ -215,6 +249,83 @@ function buildYoudaoDictionaryPayload(query, options = {}) {
   };
 }
 
+function legacyYoudaoText(value) {
+  if (typeof value === "string") return clean(value);
+  if (!value || typeof value !== "object") return "";
+  return clean(value["#text"] || value.text || value.word || value.value);
+}
+
+function legacyYoudaoItems(value) {
+  return (Array.isArray(value) ? value : value == null ? [] : [value])
+    .map(legacyYoudaoText)
+    .filter(Boolean);
+}
+
+function legacyReturnPhrase(word, query) {
+  const value = word?.["return-phrase"];
+  return clean(value?.l?.i || value?.["#text"] || value || query);
+}
+
+function normalizeLegacyEnglishWord(word, query) {
+  const senses = (word?.trs || []).flatMap(row => (row?.tr || []).map(item => {
+    const level = item?.l || {};
+    let partOfSpeech = clean(level.pos);
+    let translation = clean(level["#tran"] || legacyYoudaoItems(level.i).join("；"));
+    if (!partOfSpeech) {
+      const match = translation.match(/^([a-z][a-z-]*)\.\s*/i);
+      if (match) {
+        partOfSpeech = `${match[1]}.`;
+        translation = clean(translation.slice(match[0].length));
+      }
+    }
+    return { pos: partOfSpeech, tran: translation };
+  })).filter(row => row.tran);
+  return {
+    ...word,
+    word: legacyReturnPhrase(word, query),
+    trs: senses
+  };
+}
+
+function normalizeLegacyChineseWord(word, query) {
+  const senses = (word?.trs || []).flatMap(row => (row?.tr || []).map(item => {
+    const level = item?.l || {};
+    const linkedWords = (Array.isArray(level.i) ? level.i : [level.i])
+      .filter(value => value && typeof value === "object")
+      .map(legacyYoudaoText)
+      .filter(Boolean);
+    return {
+      pos: clean(level.pos),
+      "#text": linkedWords[0] || legacyYoudaoItems(level.i)[0] || "",
+      "#tran": clean(level["#tran"])
+    };
+  })).filter(row => row["#text"] || row["#tran"]);
+  return {
+    ...word,
+    word: legacyReturnPhrase(word, query),
+    "return-phrase": legacyReturnPhrase(word, query),
+    trs: senses
+  };
+}
+
+function normalizeYoudaoLegacyPayload(data, query, language = "en") {
+  if (!data || typeof data !== "object") return data;
+  const legacyEnglishWord = Array.isArray(data?.ec?.word) ? data.ec.word[0] : null;
+  const legacyChineseWord = Array.isArray(data?.ce?.word) ? data.ce.word[0] : null;
+  if (!legacyEnglishWord && !legacyChineseWord) return data;
+  return {
+    ...data,
+    ...(legacyEnglishWord ? {
+      ec: { ...data.ec, word: normalizeLegacyEnglishWord(legacyEnglishWord, query) }
+    } : {}),
+    ...(legacyChineseWord ? {
+      ce: { ...data.ce, word: normalizeLegacyChineseWord(legacyChineseWord, query) }
+    } : {}),
+    __medictApi: "web-v2-fast",
+    __medictLanguage: language
+  };
+}
+
 function youdaoAudioUrl(value) {
   const audio = clean(value);
   if (!audio) return "";
@@ -267,7 +378,7 @@ function normalizeYoudaoPartOfSpeech(value) {
 function youdaoTranslationValue(value) {
   if (typeof value === "string") return clean(value);
   if (!value || typeof value !== "object") return "";
-  return clean(value.word || value.w || value.tran || value.translation || value.text || value.value);
+  return clean(value.word || value.w || value.tran || value.translation || value.text || value.value || value["#text"] || value["#tran"]);
 }
 
 function youdaoSynonymValues(data, partOfSpeech) {
@@ -617,13 +728,67 @@ function youdaoTags(data, expandedRows = []) {
       ? content.examType.flatMap(item => [item?.en, item?.zh])
       : [];
   });
-  const examTypes = Array.isArray(data?.ec?.exam_type)
-    ? data.ec.exam_type
-    : [data?.ec?.exam_type];
+  const rawExamTypes = data?.ec?.exam_type ?? data?.ce?.exam_type;
+  const examTypes = Array.isArray(rawExamTypes) ? rawExamTypes : [rawExamTypes];
   return unique([...examTypes, ...expandedTags]);
 }
 
+function normalizeYoudaoChineseDictionary(data, query) {
+  const word = data?.ce?.word || {};
+  const text = clean(word.word || word?.["return-phrase"] || query);
+  const rows = Array.isArray(word.trs) ? word.trs : [];
+  const senses = [];
+  for (const row of rows) {
+    appendYoudaoSense(senses, {
+      partOfSpeech: normalizeYoudaoPartOfSpeech(row?.pos || row?.part),
+      definition: "",
+      translations: unique([row?.["#text"], row?.text, row?.word]),
+      examples: [],
+      synonyms: [],
+      antonyms: [],
+      note: clean(row?.["#tran"] || row?.tran || row?.translation)
+    });
+  }
+  const normalizedSenses = senses.slice(0, MAX_YOUDAO_SENSES);
+  if (!text || !normalizedSenses.length) return null;
+
+  const phone = youdaoPhonetic(word.phone);
+  const audioUrl = youdaoAudioUrl(`${text}&le=zh`);
+  const language = clean(data?.__medictLanguage || data?.le || "en") || "en";
+  const sourceUrl = `https://dict.youdao.com/result?word=${encodeURIComponent(text)}&lang=${encodeURIComponent(language)}`;
+  const phonetics = phone ? [{ label: "拼音", text: phone, audioUrl }] : [];
+  return {
+    type: "online-dictionary",
+    provider: "youdao-dictionary",
+    name: "网易有道词典",
+    word: text,
+    phonetic: phone ? `拼音 ${phone}` : "",
+    phonetics,
+    audioUrl,
+    wordForms: [],
+    senses: normalizedSenses,
+    examples: youdaoDictionaryExamples(data),
+    phrases: youdaoPhraseRows(data),
+    relatedWords: youdaoRelatedWordRows(data),
+    webTranslations: youdaoWebTranslationRows(data),
+    tags: youdaoTags(data),
+    source: {
+      id: "youdao-dictionary",
+      name: "网易有道网页词典",
+      license: "有道网页服务",
+      url: sourceUrl
+    },
+    meta: {
+      api: clean(data?.__medictApi || "web-v4"),
+      senseCount: normalizedSenses.length,
+      responseSections: Object.keys(data || {}).filter(key => !key.startsWith("__"))
+    }
+  };
+}
+
 function normalizeYoudaoDictionary(data, query) {
+  data = normalizeYoudaoLegacyPayload(data, query, data?.le || "en");
+  if (!data?.ec?.word && data?.ce?.word) return normalizeYoudaoChineseDictionary(data, query);
   const word = data?.ec?.word || {};
   const text = clean(word.word || query);
   if (!text) return null;
@@ -666,7 +831,8 @@ function normalizeYoudaoDictionary(data, query) {
   const normalizedSenses = senses.slice(0, MAX_YOUDAO_SENSES);
   if (!normalizedSenses.length) return null;
 
-  const sourceUrl = `https://dict.youdao.com/result?word=${encodeURIComponent(text)}&lang=en`;
+  const language = clean(data?.__medictLanguage || data?.le || "en") || "en";
+  const sourceUrl = `https://dict.youdao.com/result?word=${encodeURIComponent(text)}&lang=${encodeURIComponent(language)}`;
   const extraWordForms = [
     ...expandedWords.flatMap(row => Array.isArray(row?.wfs) ? row.wfs : []),
     ...gramcats.flatMap(row => (row?.forms || []).map(form => ({ name: "词典词形", value: form?.form })))
@@ -693,28 +859,74 @@ function normalizeYoudaoDictionary(data, query) {
       url: sourceUrl
     },
     meta: {
-      api: "web-v4",
+      api: clean(data?.__medictApi || "web-v4"),
       senseCount: normalizedSenses.length,
-      responseSections: Object.keys(data || {})
+      responseSections: Object.keys(data || {}).filter(key => !key.startsWith("__"))
     }
   };
 }
 
-async function queryYoudaoDictionary(query) {
-  const word = clean(query).toLowerCase();
-  if (!isEnglishDictionaryQuery(word)) return null;
-  const payload = buildYoudaoDictionaryPayload(word, { le: "en" });
+function youdaoRequestHeaders(contentType = false) {
+  return {
+    Accept: "application/json",
+    ...(contentType ? { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" } : {}),
+    Referer: YOUDAO_TRANSLATION_HOME,
+    Cookie: "OUTFOX_SEARCH_USER_ID=1796239350@10.110.96.157;",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36"
+  };
+}
+
+async function queryYoudaoFastDictionary(word, language) {
+  const dicts = JSON.stringify({ count: 99, dicts: [YOUDAO_FAST_SECTIONS] });
+  const query = new URLSearchParams({ q: word, le: language, dicts });
+  const data = await fetchJson(`${YOUDAO_DICTIONARY_FAST_URL}?${query.toString()}`, {
+    headers: youdaoRequestHeaders(false)
+  }, 5000);
+  const normalizedData = normalizeYoudaoLegacyPayload(data, word, language);
+  const entry = normalizeYoudaoDictionary(normalizedData, word);
+  if (!entry) throw new Error("有道快速词典未返回词条");
+  return entry;
+}
+
+async function queryYoudaoV4Dictionary(word, language) {
+  const payload = buildYoudaoDictionaryPayload(word, { le: language });
   const data = await fetchJson(YOUDAO_DICTIONARY_URL, {
     method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-      Referer: YOUDAO_DICTIONARY_HOME,
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36"
-    },
+    headers: youdaoRequestHeaders(true),
     body: new URLSearchParams(payload).toString()
   }, 16000);
-  return normalizeYoudaoDictionary(data, word);
+  const entry = normalizeYoudaoDictionary({ ...data, __medictApi: "web-v4", __medictLanguage: language }, word);
+  if (!entry) throw new Error("有道 V4 词典未返回词条");
+  return entry;
+}
+
+function delay(milliseconds) {
+  return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
+async function queryYoudaoDictionary(query, options = {}) {
+  const rawWord = clean(query);
+  if (!isYoudaoDictionaryQuery(rawWord, options)) return null;
+  const word = isEnglishDictionaryQuery(rawWord) ? rawWord.toLowerCase() : rawWord;
+  const language = youdaoForeignLanguage(word, options);
+  let winnerChosen = false;
+  const fast = queryYoudaoFastDictionary(word, language).then(entry => {
+    winnerChosen = true;
+    return entry;
+  });
+  const fallback = delay(700).then(() => {
+    if (winnerChosen) return new Promise(() => {});
+    return queryYoudaoV4Dictionary(word, language).then(entry => {
+      winnerChosen = true;
+      return entry;
+    });
+  });
+  try {
+    return await Promise.any([fast, fallback]);
+  } catch (error) {
+    const reasons = Array.isArray(error?.errors) ? error.errors : [];
+    throw reasons.find(reason => reason instanceof Error) || error;
+  }
 }
 
 function youdaoLanguageLabel(value) {
@@ -783,15 +995,10 @@ function normalizeYoudaoTranslation(data, query) {
 async function queryYoudaoTranslation(query, options = {}) {
   const text = clean(query);
   if (!text) return null;
-  const payload = buildYoudaoDictionaryPayload(text, { le: options.le || "en" });
+  const payload = buildYoudaoDictionaryPayload(text, { le: youdaoForeignLanguage(text, options) });
   const data = await fetchJson(YOUDAO_DICTIONARY_URL, {
     method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-      Referer: YOUDAO_DICTIONARY_HOME,
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36"
-    },
+    headers: youdaoRequestHeaders(true),
     body: new URLSearchParams(payload).toString()
   }, 16000);
   return normalizeYoudaoTranslation(data, text);
@@ -937,11 +1144,14 @@ async function queryMerriamWebster(query, config = {}) {
 module.exports = {
   buildYoudaoDictionaryPayload,
   fetchJson,
+  isChineseDictionaryQuery,
   isEnglishDictionaryQuery,
+  isYoudaoDictionaryQuery,
   normalizeFreeDictionary,
   runtimeFetch,
   normalizeMerriamItem,
   normalizeYoudaoTranslation,
+  normalizeYoudaoLegacyPayload,
   normalizeOxford,
   normalizeYoudaoDictionary,
   queryFreeDictionary,

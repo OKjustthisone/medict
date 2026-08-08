@@ -35,6 +35,10 @@ let isQuitting = false;
 let temporarySelectionTop = false;
 let shortcutCaptureInFlight = false;
 let shortcutsSuspended = false;
+const wordLookupCache = new Map();
+const WORD_LOOKUP_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
+const WORD_LOOKUP_CACHE_LIMIT = 100;
+const QUERY_LANGUAGE_CODES = new Set(["auto", "zh-CN", "en", "ja", "ko", "fr", "de", "es", "ru"]);
 
 const ATOM_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect x="2" y="2" width="60" height="60" rx="16" fill="#4c72e8"/><g fill="none" stroke="#fff" stroke-linecap="round" stroke-width="3.1" opacity=".94"><ellipse cx="32" cy="32" rx="23" ry="9"/><ellipse cx="32" cy="32" rx="23" ry="9" transform="rotate(60 32 32)"/><ellipse cx="32" cy="32" rx="23" ry="9" transform="rotate(-60 32 32)"/></g><circle cx="32" cy="32" r="6.5" fill="#e9fbff"/><circle cx="32" cy="32" r="3.5" fill="#27a9d4"/></svg>`;
 
@@ -144,11 +148,64 @@ function syncSelectionMonitor() {
   else stopSelectionMonitor();
 }
 
-async function runWordLookup(query) {
-  return lookupWord(query, {
-    dictionaryManager,
-    settings: settingsStore.get()
+function wordLookupCacheKey(query, settings, requestOptions = {}) {
+  const translation = settings.translation || {};
+  const dictionary = settings.dictionary || {};
+  return JSON.stringify([
+    String(query || "").trim().toLowerCase(),
+    requestOptions.source || translation.source || "auto",
+    requestOptions.target || translation.target || "zh-CN",
+    dictionary.youdaoDictionary?.enabled !== false,
+    dictionary.freeDictionary?.enabled !== false,
+    Boolean(translation.google?.enabled),
+    translation.google?.mode || "web",
+    Boolean(translation.baidu?.enabled),
+    dictionary.serviceOrder || []
+  ]);
+}
+
+function readWordLookupCache(key) {
+  const cached = wordLookupCache.get(key);
+  if (!cached) return null;
+  if (cached.expiresAt <= Date.now()) {
+    wordLookupCache.delete(key);
+    return null;
+  }
+  wordLookupCache.delete(key);
+  wordLookupCache.set(key, cached);
+  return {
+    ...cached.result,
+    cache: { hit: true, cachedAt: cached.cachedAt, expiresAt: cached.expiresAt }
+  };
+}
+
+function writeWordLookupCache(key, result) {
+  if (!result?.success) return result;
+  const cachedAt = Date.now();
+  wordLookupCache.set(key, {
+    result,
+    cachedAt,
+    expiresAt: cachedAt + WORD_LOOKUP_CACHE_TTL_MS
   });
+  while (wordLookupCache.size > WORD_LOOKUP_CACHE_LIMIT) {
+    wordLookupCache.delete(wordLookupCache.keys().next().value);
+  }
+  return { ...result, cache: { hit: false, cachedAt, expiresAt: cachedAt + WORD_LOOKUP_CACHE_TTL_MS } };
+}
+
+async function runWordLookup(query, requestOptions = {}, onPartial = null) {
+  const settings = settingsStore.get();
+  const cacheKey = wordLookupCacheKey(query, settings, requestOptions);
+  const cached = readWordLookupCache(cacheKey);
+  if (cached) return cached;
+  const result = await lookupWord(query, {
+    dictionaryManager,
+    settings,
+    source: requestOptions.source,
+    target: requestOptions.target,
+    onPartial
+  });
+  return writeWordLookupCache(cacheKey, result);
 }
 
 async function runDrugLookup(query) {
@@ -198,11 +255,21 @@ async function runSelectionLookup(rawText, options = {}) {
   const requestId = ++selectionRequestId;
   showNearCursor({ focus: Boolean(options.focus) });
   sendToRenderer("selection:pending", { query, requestId });
-  const [wordResult] = await Promise.allSettled([runWordLookup(query)]);
+  const [wordResult] = await Promise.allSettled([runWordLookup(query, {}, partial => {
+    if (requestId !== selectionRequestId) return;
+    sendToRenderer("selection:result", {
+      query,
+      requestId,
+      partial: true,
+      word: partial,
+      errors: { word: "" }
+    });
+  })]);
   if (requestId !== selectionRequestId) return;
   sendToRenderer("selection:result", {
     query,
     requestId,
+    partial: false,
     word: wordResult.status === "fulfilled" ? wordResult.value : null,
     errors: {
       word: wordResult.status === "rejected" ? String(wordResult.reason?.message || wordResult.reason) : ""
@@ -259,6 +326,7 @@ function registerIpc() {
       applyConfiguredShortcuts(next);
       if (keepSuspended) globalShortcut.unregisterAll();
       saved = await settingsStore.save(next);
+      wordLookupCache.clear();
     } catch (error) {
       globalShortcut.unregisterAll();
       if (!keepSuspended) {
@@ -277,6 +345,15 @@ function registerIpc() {
     syncSelectionMonitor();
     return saved;
   });
+  ipcMain.handle("settings:set-language-pair", async (_, value = {}) => {
+    const settings = settingsStore.get();
+    const requestedSource = String(value.source || "auto");
+    const requestedTarget = String(value.target || "zh-CN");
+    settings.translation.source = QUERY_LANGUAGE_CODES.has(requestedSource) ? requestedSource : "auto";
+    settings.translation.target = QUERY_LANGUAGE_CODES.has(requestedTarget) && requestedTarget !== "auto" ? requestedTarget : "zh-CN";
+    wordLookupCache.clear();
+    return settingsStore.save(settings);
+  });
   ipcMain.handle("dictionary:list", () => dictionaryManager.listSources());
   ipcMain.handle("dictionary:import", async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
@@ -294,7 +371,14 @@ function registerIpc() {
     return { canceled: false, sources };
   });
 
-  ipcMain.handle("lookup:word", (_, query) => runWordLookup(query));
+  ipcMain.handle("lookup:word", (event, query, requestOptions = {}) => runWordLookup(query, requestOptions, partial => {
+    if (event.sender.isDestroyed()) return;
+    event.sender.send("lookup:word-partial", {
+      requestId: requestOptions.requestId,
+      query: String(query || "").trim(),
+      result: partial
+    });
+  }));
   ipcMain.handle("lookup:drug", (_, query) => runDrugLookup(query));
   ipcMain.handle("lookup:selection", (_, query) => runSelectionLookup(query));
   ipcMain.handle("selection:status", () => selectionStatus);
