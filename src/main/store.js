@@ -9,7 +9,7 @@ const DEFAULT_SETTINGS = {
     freeDictionary: {
       enabled: true
     },
-    serviceOrder: ["youdaoDictionary", "freeDictionary", "baidu", "google", "youdao"],
+    serviceOrder: ["youdaoDictionary", "freeDictionary", "baidu", "google"],
     oxford: {
       enabled: false,
       appId: "",
@@ -26,11 +26,6 @@ const DEFAULT_SETTINGS = {
       enabled: true,
       mode: "web",
       apiKey: ""
-    },
-    youdao: {
-      enabled: false,
-      appKey: "",
-      appSecret: ""
     },
     baidu: {
       enabled: false,
@@ -64,7 +59,9 @@ function clone(value) {
 function normalizeDictionaryServiceOrder(value) {
   const defaultOrder = DEFAULT_SETTINGS.dictionary.serviceOrder;
   const requested = Array.isArray(value) ? value : [];
-  const selected = [...new Set(requested.filter(item => defaultOrder.includes(item)))];
+  const selected = [...new Set(requested
+    .map(item => item === "youdao" ? "youdaoDictionary" : item)
+    .filter(item => defaultOrder.includes(item)))];
   const missing = defaultOrder.filter(item => !selected.includes(item));
   const firstService = defaultOrder[0];
   return [
@@ -76,6 +73,19 @@ function normalizeDictionaryServiceOrder(value) {
 
 function mergeSettings(value) {
   const source = value && typeof value === "object" ? value : {};
+  const translation = {
+    ...clone(DEFAULT_SETTINGS.translation),
+    ...(source.translation || {}),
+    google: {
+      ...clone(DEFAULT_SETTINGS.translation.google),
+      ...(source.translation?.google || {})
+    },
+    baidu: {
+      ...clone(DEFAULT_SETTINGS.translation.baidu),
+      ...(source.translation?.baidu || {})
+    }
+  };
+  delete translation.youdao;
   return {
     ...clone(DEFAULT_SETTINGS),
     ...source,
@@ -100,22 +110,7 @@ function mergeSettings(value) {
         ...(source.dictionary?.merriamWebster || {})
       }
     },
-    translation: {
-      ...clone(DEFAULT_SETTINGS.translation),
-      ...(source.translation || {}),
-      google: {
-        ...clone(DEFAULT_SETTINGS.translation.google),
-        ...(source.translation?.google || {})
-      },
-      youdao: {
-        ...clone(DEFAULT_SETTINGS.translation.youdao),
-        ...(source.translation?.youdao || {})
-      },
-      baidu: {
-        ...clone(DEFAULT_SETTINGS.translation.baidu),
-        ...(source.translation?.baidu || {})
-      }
-    },
+    translation,
     behavior: {
       ...clone(DEFAULT_SETTINGS.behavior),
       ...(source.behavior || {})

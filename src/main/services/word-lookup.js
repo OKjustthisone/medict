@@ -1,7 +1,7 @@
 const { isEnglishDictionaryQuery, queryFreeDictionary, queryYoudaoDictionary } = require("./dictionary-api");
 const { translateSegments, translateText } = require("./translation");
 
-const DEFAULT_SERVICE_ORDER = ["youdaoDictionary", "freeDictionary", "baidu", "google", "youdao"];
+const DEFAULT_SERVICE_ORDER = ["youdaoDictionary", "freeDictionary", "baidu", "google"];
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -9,18 +9,20 @@ function clean(value) {
 
 function serviceIdForResult(result) {
   const provider = clean(result?.provider).toLowerCase();
-  if (provider === "youdao-dictionary") return "youdaoDictionary";
+  if (provider === "youdao-dictionary" || provider === "youdao-web") return "youdaoDictionary";
   if (provider.includes("baidu")) return "baidu";
   if (provider === "free-dictionary") return "freeDictionary";
   if (provider.includes("google")) return "google";
-  if (provider.includes("youdao")) return "youdao";
+  if (provider.includes("youdao")) return "youdaoDictionary";
   return provider;
 }
 
 function serviceOrder(settings = {}) {
   const configured = settings.dictionary?.serviceOrder;
   const requested = Array.isArray(configured) ? configured : [];
-  const selected = [...new Set(requested.filter(item => DEFAULT_SERVICE_ORDER.includes(item)))];
+  const selected = [...new Set(requested
+    .map(item => item === "youdao" ? "youdaoDictionary" : item)
+    .filter(item => DEFAULT_SERVICE_ORDER.includes(item)))];
   const missing = DEFAULT_SERVICE_ORDER.filter(item => !selected.includes(item));
   const firstService = DEFAULT_SERVICE_ORDER[0];
   return [
@@ -42,11 +44,11 @@ function sortByServiceOrder(results, settings = {}) {
 function configuredCloudProviders(settings = {}) {
   const translation = settings.translation || {};
   const providers = [];
+  if (settings.dictionary?.youdaoDictionary?.enabled !== false) {
+    providers.push("youdao-web");
+  }
   if (translation.google?.enabled && (translation.google.apiKey || translation.google.mode === "web")) {
     providers.push("google");
-  }
-  if (translation.youdao?.enabled && translation.youdao.appKey && translation.youdao.appSecret) {
-    providers.push("youdao");
   }
   if (translation.baidu?.enabled && translation.baidu.apiKey && translation.baidu.secretKey) {
     providers.unshift("baidu");

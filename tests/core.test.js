@@ -6,11 +6,11 @@ const test = require("node:test");
 const { DictionaryManager, normalizeEntry, parseCsv } = require("../src/main/dictionary-manager");
 const { DrugCache, normalizeDrugCacheKey, SEVEN_DAYS_MS } = require("../src/main/drug-cache");
 const { normalizeAccelerator, registerShortcutConfiguration, validateShortcutConfiguration } = require("../src/main/shortcut-manager");
-const { buildYoudaoDictionaryPayload, normalizeFreeDictionary, normalizeMerriamItem, normalizeYoudaoDictionary } = require("../src/main/services/dictionary-api");
+const { buildYoudaoDictionaryPayload, normalizeFreeDictionary, normalizeMerriamItem, normalizeYoudaoDictionary, normalizeYoudaoTranslation } = require("../src/main/services/dictionary-api");
 const { chooseChemblCandidate, hasDrugIdentity } = require("../src/main/services/drugshop");
 const { parseSelectionLine } = require("../src/main/selection-monitor");
 const { lookupWord, sortByServiceOrder } = require("../src/main/services/word-lookup");
-const { buildYoudaoPayload, createBaiduError, normalizeBaiduDictionary, targetForBaidu } = require("../src/main/services/translation");
+const { createBaiduError, normalizeBaiduDictionary, targetForBaidu } = require("../src/main/services/translation");
 const { mergeSettings, normalizeDictionaryServiceOrder } = require("../src/main/store");
 
 test("normalizes a local bilingual dictionary entry", () => {
@@ -51,17 +51,13 @@ test("loads and searches the bundled local dictionary", async () => {
   }
 });
 
-test("creates the v3 Youdao signature payload without exposing plaintext signing logic to the UI", () => {
-  const payload = buildYoudaoPayload("This is a reasonably long sentence for signing.", {
-    appKey: "demo-key",
-    appSecret: "demo-secret",
-    source: "auto",
-    target: "zh-CN"
-  }, 1700000000000);
-  assert.equal(payload.to, "zh-CHS");
-  assert.equal(payload.sign.length, 64);
-  assert.equal(payload.salt, "1700000000000");
-  assert.equal(payload.curtime, "1700000000");
+test("creates the Youdao web V4 signature payload without exposing signing logic to the UI", () => {
+  const payload = buildYoudaoDictionaryPayload("This is a reasonably long sentence for signing.", { le: "en" });
+  assert.equal(payload.q, "This is a reasonably long sentence for signing.");
+  assert.equal(payload.le, "en");
+  assert.equal(payload.client, "web");
+  assert.equal(payload.keyfrom, "webdict");
+  assert.equal(payload.sign.length, 32);
 });
 
 test("normalizes Baidu dictionary data into phonetics, senses and word forms", () => {
@@ -220,6 +216,78 @@ test("normalizes the Youdao web dictionary into phonetics, senses, forms and bil
   assert.ok(entry.senses[0].synonyms.includes("admirer"));
 });
 
+test("keeps Youdao expanded meanings, sentence corpus, phrases and related words", () => {
+  const entry = normalizeYoudaoDictionary({
+    ec: {
+      word: {
+        word: "mouse",
+        ukphone: "maʊs",
+        usphone: "maʊs",
+        trs: [{ pos: "n.", tran: "老鼠；鼠标；安静害羞的人" }],
+        wfs: [{ wf: { name: "复数", value: "mice或mouses" } }]
+      },
+      exam_type: ["CET4"]
+    },
+    collins_primary: {
+      gramcat: [{
+        partofspeech: "noun",
+        senses: [{
+          definition: "a small animal with a long tail",
+          word: "老鼠；耗子",
+          examples: []
+        }]
+      }]
+    },
+    expand_ec: {
+      word: [{
+        pos: "n.",
+        transList: [{
+          trans: "鼠标",
+          content: {
+            detailPos: "cn.",
+            examType: [{ en: "CET4", zh: "四级" }],
+            sents: [{
+              sentOrig: "Use the <b>mouse</b> to drag the icon.",
+              sentTrans: "用鼠标拖动图标。",
+              source: "《牛津词典》"
+            }]
+          }
+        }]
+      }]
+    },
+    blng_sents_part: {
+      "sentence-pair": [{
+        sentence: "The mouse ran away.",
+        "sentence-translation": "老鼠跑掉了。",
+        source: "《牛津词典》"
+      }]
+    },
+    phrs: { phrs: [{ headword: "mouse button", translation: "鼠标按钮" }] },
+    rel_word: { rels: [{ rel: { pos: "adj.", words: [{ word: "mousy", tran: "像老鼠的" }] } }] },
+    ee: { word: { trs: [{ pos: "v.", tr: [{ tran: "manipulate the mouse of a computer" }] }] } }
+  }, "mouse");
+  assert.ok(entry.senses.some(sense => sense.translations.includes("鼠标")));
+  assert.ok(entry.senses.some(sense => sense.definition.includes("manipulate the mouse")));
+  assert.ok(entry.examples.some(row => row.translation === "用鼠标拖动图标。"));
+  assert.deepEqual(entry.phrases, [{ phrase: "mouse button", translations: ["鼠标按钮"] }]);
+  assert.equal(entry.relatedWords[0].word, "mousy");
+  assert.ok(entry.tags.includes("CET4"));
+});
+
+test("normalizes Youdao web sentence translation", () => {
+  const result = normalizeYoudaoTranslation({
+    fanyi: {
+      input: "I clicked the mouse.",
+      type: "en2zh-CHS",
+      tran: "我点击了鼠标。"
+    },
+    meta: { guessLanguage: "eng" }
+  }, "I clicked the mouse.");
+  assert.equal(result.provider, "youdao-web");
+  assert.equal(result.detectedSource, "en");
+  assert.deepEqual(result.translations, ["我点击了鼠标。"]);
+});
+
 test("uses an exact local dictionary hit without calling a cloud provider", async () => {
   let cloudCalls = 0;
   let dictionaryCalls = 0;
@@ -265,7 +333,7 @@ test("falls back to enabled cloud lookup when local dictionaries miss", async ()
   });
   assert.equal(result.strategy, "cloud");
   assert.equal(result.cloudResults[0].translations[0], "serendipity-中文");
-  assert.deepEqual(result.providers, ["google"]);
+  assert.deepEqual(result.providers, ["youdao-web", "google"]);
   assert.equal(cloudCalls, 1);
 });
 
@@ -343,15 +411,14 @@ test("prefers a Baidu dictionary payload and keeps other providers as translatio
 });
 
 test("keeps Free Dictionary optional and sorts dictionary services by the configured order", async () => {
-  assert.deepEqual(normalizeDictionaryServiceOrder(["youdao", "baidu", "youdao"]), ["youdaoDictionary", "youdao", "baidu", "freeDictionary", "google"]);
+  assert.deepEqual(normalizeDictionaryServiceOrder(["youdao", "baidu", "youdao"]), ["youdaoDictionary", "baidu", "freeDictionary", "google"]);
   const ordered = sortByServiceOrder([
     { provider: "google" },
     { provider: "free-dictionary" },
     { provider: "baidu-dictionary" },
-    { provider: "youdao" },
     { provider: "youdao-dictionary" }
-  ], mergeSettings({ dictionary: { serviceOrder: ["freeDictionary", "youdaoDictionary", "youdao", "baidu", "google"] } }));
-  assert.deepEqual(ordered.map(item => item.provider), ["free-dictionary", "youdao-dictionary", "youdao", "baidu-dictionary", "google"]);
+  ], mergeSettings({ dictionary: { serviceOrder: ["freeDictionary", "youdaoDictionary", "baidu", "google"] } }));
+  assert.deepEqual(ordered.map(item => item.provider), ["free-dictionary", "youdao-dictionary", "baidu-dictionary", "google"]);
 
   let dictionaryCalls = 0;
   const result = await lookupWord("fan", {
@@ -390,7 +457,7 @@ test("queries the Youdao web dictionary independently and keeps dictionary resul
     dictionaryManager: {
       searchLocal: async () => ({ exactResults: [], suggestions: [], warnings: [], sources: [] })
     },
-    settings: mergeSettings({ dictionary: { serviceOrder: ["google", "youdaoDictionary", "freeDictionary", "baidu", "youdao"] } }),
+    settings: mergeSettings({ dictionary: { serviceOrder: ["google", "youdaoDictionary", "freeDictionary", "baidu"] } }),
     queryYoudaoDictionary: async () => webEntry,
     queryDictionary: async () => freeEntry,
     translate: async () => ({ results: [{ provider: "google", name: "Google", translations: ["扇子"] }], warnings: [] }),
@@ -403,6 +470,35 @@ test("queries the Youdao web dictionary independently and keeps dictionary resul
   assert.deepEqual(result.displayResults.map(item => item.provider), ["google", "youdao-dictionary", "free-dictionary"]);
   assert.equal(segmentCalls, 1);
   assert.equal(result.dictionaryResults[1].senses[0].translations[0], "风扇");
+});
+
+test("routes phrases and sentences to translation instead of word dictionaries", async () => {
+  let dictionaryCalls = 0;
+  const result = await lookupWord("I clicked the mouse.", {
+    dictionaryManager: {
+      searchLocal: async () => ({ exactResults: [], suggestions: [], warnings: [], sources: [] })
+    },
+    settings: mergeSettings({}),
+    queryYoudaoDictionary: async () => {
+      dictionaryCalls += 1;
+      return null;
+    },
+    queryDictionary: async () => {
+      dictionaryCalls += 1;
+      return null;
+    },
+    translate: async () => ({
+      source: "en",
+      target: "zh-CN",
+      results: [{ provider: "youdao-web", name: "网易有道网页翻译", translations: ["我点击了鼠标。"] }],
+      warnings: []
+    })
+  });
+  assert.equal(dictionaryCalls, 0);
+  assert.equal(result.strategy, "cloud");
+  assert.equal(result.dictionaryResults.length, 0);
+  assert.equal(result.cloudResults[0].provider, "youdao-web");
+  assert.equal(result.cloudResults[0].translations[0], "我点击了鼠标。");
 });
 
 test("decodes UTF-8 selection messages from the Windows helper", () => {
@@ -453,7 +549,7 @@ test("defaults to automatic selection and Google web fallback without storing a 
   assert.equal(settings.appearance.fontScale, 115);
   assert.equal(settings.dictionary.youdaoDictionary.enabled, true);
   assert.equal(settings.dictionary.freeDictionary.enabled, true);
-  assert.deepEqual(settings.dictionary.serviceOrder, ["youdaoDictionary", "freeDictionary", "baidu", "google", "youdao"]);
+  assert.deepEqual(settings.dictionary.serviceOrder, ["youdaoDictionary", "freeDictionary", "baidu", "google"]);
   assert.equal(settings.shortcuts.showWindow, "CommandOrControl+Alt+M");
   assert.equal(settings.shortcuts.selectionLookup, "CommandOrControl+Alt+D");
   assert.equal(settings.translation.google.enabled, true);
@@ -461,6 +557,7 @@ test("defaults to automatic selection and Google web fallback without storing a 
   assert.equal(settings.translation.google.apiKey, "");
   assert.equal(settings.translation.baidu.enabled, false);
   assert.equal(settings.translation.baidu.apiKey, "");
+  assert.equal(settings.translation.youdao, undefined);
 });
 
 test("preserves a configured result font scale", () => {

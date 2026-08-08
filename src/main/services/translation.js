@@ -1,5 +1,4 @@
-const crypto = require("node:crypto");
-const { fetchJson } = require("./dictionary-api");
+const { fetchJson, isEnglishDictionaryQuery, queryYoudaoTranslation } = require("./dictionary-api");
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -17,17 +16,6 @@ async function mapWithConcurrency(values, limit, worker) {
   });
   await Promise.all(runners);
   return rows;
-}
-
-function targetForYoudao(value) {
-  const normalized = clean(value).toLowerCase();
-  return normalized === "zh-cn" || normalized === "zh" ? "zh-CHS" : normalized === "en-us" ? "en" : normalized;
-}
-
-function inputForYoudao(value) {
-  const input = String(value || "");
-  if (input.length <= 20) return input;
-  return `${input.slice(0, 10)}${input.length}${input.slice(-10)}`;
 }
 
 const BAIDU_TOKEN_URL = "https://aip.baidubce.com/oauth/2.0/token";
@@ -356,28 +344,6 @@ async function translateBaiduMany(texts, config = {}) {
   });
 }
 
-function buildYoudaoPayload(text, config = {}, options = {}) {
-  const now = typeof options === "number" ? options : options.now || Date.now();
-  const salt = typeof options === "number" ? String(options) : (options.salt || crypto.randomUUID());
-  const curtime = String(Math.floor(now / 1000));
-  const q = String(text || "");
-  const from = clean(config.source || "auto");
-  const to = targetForYoudao(config.target || "zh-CN");
-  const sign = crypto.createHash("sha256")
-    .update(`${config.appKey}${inputForYoudao(q)}${salt}${curtime}${config.appSecret}`)
-    .digest("hex");
-  return {
-    q,
-    from,
-    to,
-    appKey: config.appKey,
-    salt,
-    sign,
-    signType: "v3",
-    curtime
-  };
-}
-
 async function translateGoogle(text, config = {}) {
   if (!config.apiKey || config.mode === "web") {
     return translateGoogleWeb(text, config);
@@ -464,42 +430,6 @@ async function translateGoogleWeb(text, config = {}) {
   };
 }
 
-async function translateYoudao(text, config = {}) {
-  const payload = buildYoudaoPayload(text, config);
-  const body = new URLSearchParams(payload);
-  const data = await fetchJson("https://openapi.youdao.com/api", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: body.toString()
-  });
-  if (data?.errorCode && data.errorCode !== "0") {
-    throw new Error(`有道错误码 ${data.errorCode}`);
-  }
-  return {
-    provider: "youdao",
-    name: "有道智云翻译",
-    detectedSource: data?.l?.split("2")[0] || "",
-    translations: [
-      ...(Array.isArray(data?.translation) ? data.translation : []),
-      ...(Array.isArray(data?.basic?.explains) ? data.basic.explains : [])
-    ].map(clean).filter(Boolean),
-    source: {
-      id: "youdao",
-      name: "有道智云翻译",
-      license: "有道智云 API 条款",
-      url: "https://ai.youdao.com/product-fanyi.s"
-    }
-  };
-}
-
-async function translateYoudaoMany(texts, config = {}) {
-  const inputs = texts.map(clean).filter(Boolean);
-  return mapWithConcurrency(inputs, 3, async text => {
-    const result = await translateYoudao(text, config);
-    return clean(result.translations[0]);
-  });
-}
-
 async function translateSegments(texts, settings = {}) {
   const inputs = texts.map(clean).filter(Boolean);
   const translation = settings.translation || {};
@@ -520,19 +450,6 @@ async function translateSegments(texts, settings = {}) {
       };
     } catch (error) {
       warnings.push(`Google 释义翻译：${error.message}`);
-    }
-  }
-
-  if (translation.youdao?.enabled && translation.youdao.appKey && translation.youdao.appSecret) {
-    try {
-      return {
-        translations: await translateYoudaoMany(inputs, { ...translation.youdao, source, target }),
-        provider: "youdao",
-        name: "有道智云翻译",
-        warnings
-      };
-    } catch (error) {
-      warnings.push(`有道释义翻译：${error.message}`);
     }
   }
 
@@ -559,6 +476,18 @@ async function translateText(text, settings = {}) {
   const target = translation.target || "zh-CN";
   const warnings = [];
   const tasks = [];
+  const youdaoWebEnabled = settings.dictionary?.youdaoDictionary?.enabled !== false;
+  const queryLooksEnglish = /^[a-z][a-z\s'.,!?;:\-()\"%]{1,500}$/i.test(query);
+  const queryLooksChinese = /[\u3400-\u9fff]/.test(query);
+  const targetLooksEnglish = /^en(?:-|$)/i.test(target);
+  const targetLooksChinese = /^zh(?:-|$)/i.test(target);
+  const sameLanguage = (queryLooksEnglish && targetLooksEnglish) || (queryLooksChinese && targetLooksChinese);
+  if (youdaoWebEnabled && !isEnglishDictionaryQuery(query) && !sameLanguage) {
+    tasks.push(queryYoudaoTranslation(query, { source, target }).catch(error => {
+      warnings.push(`网易有道网页翻译：${error.message}`);
+      return null;
+    }));
+  }
   if (translation.baidu?.enabled && translation.baidu.apiKey && translation.baidu.secretKey) {
     tasks.push(translateBaiduDictionary(query, {
       ...translation.baidu,
@@ -575,12 +504,6 @@ async function translateText(text, settings = {}) {
       return null;
     }));
   }
-  if (translation.youdao?.enabled && translation.youdao.appKey && translation.youdao.appSecret) {
-    tasks.push(translateYoudao(query, { ...translation.youdao, source, target }).catch(error => {
-      warnings.push(`有道：${error.message}`);
-      return null;
-    }));
-  }
   return {
     type: "translation",
     query,
@@ -592,10 +515,8 @@ async function translateText(text, settings = {}) {
 }
 
 module.exports = {
-  buildYoudaoPayload,
   createBaiduError,
   getBaiduAccessToken,
-  inputForYoudao,
   isBaiduDictionaryQuery,
   normalizeBaiduDictionary,
   targetForBaidu,
@@ -605,7 +526,5 @@ module.exports = {
   translateBaiduDictionary,
   translateBaiduMany,
   translateSegments,
-  translateText,
-  translateYoudao,
-  translateYoudaoMany
+  translateText
 };

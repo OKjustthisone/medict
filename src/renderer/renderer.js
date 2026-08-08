@@ -13,11 +13,10 @@
   };
 
   const dictionaryServices = [
-    { id: "youdaoDictionary", label: "网易有道词典" },
+    { id: "youdaoDictionary", label: "网易有道词典 / 翻译" },
     { id: "freeDictionary", label: "Free Dictionary" },
     { id: "baidu", label: "百度词典版" },
-    { id: "google", label: "Google" },
-    { id: "youdao", label: "有道智云" }
+    { id: "google", label: "Google" }
   ];
   const defaultDictionaryServiceOrder = dictionaryServices.map(service => service.id);
 
@@ -38,7 +37,9 @@
 
   function normalizeDictionaryServiceOrder(order) {
     const requested = Array.isArray(order) ? order : [];
-    const selected = [...new Set(requested.filter(id => defaultDictionaryServiceOrder.includes(id)))];
+    const selected = [...new Set(requested
+      .map(id => id === "youdao" ? "youdaoDictionary" : id)
+      .filter(id => defaultDictionaryServiceOrder.includes(id)))];
     const missing = defaultDictionaryServiceOrder.filter(id => !selected.includes(id));
     const firstService = defaultDictionaryServiceOrder[0];
     return [
@@ -215,7 +216,7 @@
     const localCount = state.sources.reduce((sum, source) => sum + Number(source.entryCount || 0), 0);
     const localMessage = localCount
       ? `已加载 ${localCount.toLocaleString()} 条本地词条；精确命中时不会访问云端。`
-      : "当前未安装本地词典；英文单词会查询在线词典，再用 Google / 有道补充中文释义。";
+      : "当前未安装本地词典；英文单词会查完整在线词典，短语和句子会自动翻译。";
     $("#results").innerHTML = `<div class="empty-state"><div><span class="empty-state-icon" aria-hidden="true"><svg viewBox="0 0 64 64"><rect x="2" y="2" width="60" height="60" rx="16" fill="#4c72e8"/><g fill="none" stroke="#fff" stroke-linecap="round" stroke-width="3.1" opacity=".94"><ellipse cx="32" cy="32" rx="23" ry="9"/><ellipse cx="32" cy="32" rx="23" ry="9" transform="rotate(60 32 32)"/><ellipse cx="32" cy="32" rx="23" ry="9" transform="rotate(-60 32 32)"/></g><circle cx="32" cy="32" r="6.5" fill="#e9fbff"/><circle cx="32" cy="32" r="3.5" fill="#27a9d4"/></svg></span><strong>一个输入框，两种查询</strong><p>${esc(localMessage)} 鼠标划词时，两种查询会同时执行。</p></div></div>`;
   }
 
@@ -292,11 +293,61 @@
     const exampleTranslations = Array.isArray(sense.exampleTranslations)
       ? sense.exampleTranslations.map(clean)
       : [];
+    const exampleSources = Array.isArray(sense.exampleSources)
+      ? sense.exampleSources.map(clean)
+      : [];
+    const exampleAudioUrls = Array.isArray(sense.exampleAudioUrls)
+      ? sense.exampleAudioUrls.map(clean)
+      : [];
     const exampleRows = examples.map((example, exampleIndex) => {
       const translated = exampleTranslations[exampleIndex];
-      return `<div><span>例</span>${esc(example)}${translated ? `<small class="example-translation">${esc(translated)}</small>` : ""}</div>`;
+      const source = exampleSources[exampleIndex];
+      const audioUrl = exampleAudioUrls[exampleIndex];
+      return `<div><span>例</span>${audioUrl ? `<button class="example-audio" type="button" data-audio-url="${esc(audioUrl)}" title="播放例句" aria-label="播放例句">▶</button>` : ""}${esc(example)}${translated ? `<small class="example-translation">${esc(translated)}</small>` : ""}${source ? `<small class="example-source">${esc(source)}</small>` : ""}</div>`;
     });
-    return `<div class="sense"><span class="sense-number">${index + 1}</span><div class="sense-copy">${translations.length ? `<div class="sense-translation">${translations.map(esc).join("；")}</div>` : ""}<div class="definition">${esc(sense.definition || "暂无英文释义")}</div>${exampleRows.length ? `<div class="example">${exampleRows.join("")}</div>` : ""}${renderRelated("近义", sense.synonyms)}${renderRelated("反义", sense.antonyms)}<div class="sense-footer">${copyButton("sense", "复制本条释义")}</div></div></div>`;
+    return `<div class="sense"><span class="sense-number">${index + 1}</span><div class="sense-copy">${translations.length ? `<div class="sense-translation">${translations.map(esc).join("；")}</div>` : ""}<div class="definition">${esc(sense.definition || "暂无英文释义")}</div>${sense.note ? `<div class="sense-note">${esc(sense.note)}</div>` : ""}${exampleRows.length ? `<div class="example">${exampleRows.join("")}</div>` : ""}${renderRelated("近义", sense.synonyms)}${renderRelated("反义", sense.antonyms)}<div class="sense-footer">${copyButton("sense", "复制本条释义")}</div></div></div>`;
+  }
+
+  function renderDictionaryExamples(examples) {
+    const rows = values(examples).map(row => typeof row === "object" ? row : { example: row })
+      .map(row => ({
+        example: clean(row.example || row.text),
+        translation: clean(row.translation || row.trans || row.zh || row.chn),
+        source: clean(row.source || row.sourceType || row.type),
+        audioUrl: clean(row.audioUrl)
+      }))
+      .filter(row => row.example)
+      .slice(0, 48);
+    if (!rows.length) return "";
+    const body = rows.map(row => `<div class="dictionary-example-row">${row.audioUrl ? `<button class="example-audio" type="button" data-audio-url="${esc(row.audioUrl)}" title="播放例句" aria-label="播放例句">▶</button>` : ""}<div><div class="dictionary-example-en">${esc(row.example)}</div>${row.translation ? `<div class="dictionary-example-zh">${esc(row.translation)}</div>` : ""}${row.source ? `<small class="example-source">${esc(row.source)}</small>` : ""}</div></div>`).join("");
+    return `<details class="dictionary-extra" open><summary><span>双语例句</span><span class="source-badge">${rows.length}</span></summary><div class="dictionary-extra-body">${body}</div></details>`;
+  }
+
+  function renderDictionaryPhrases(phrases) {
+    const rows = values(phrases).filter(row => row && typeof row === "object" && clean(row.phrase))
+      .slice(0, 32);
+    if (!rows.length) return "";
+    const body = rows.map(row => `<div class="dictionary-phrase-row"><strong>${esc(row.phrase)}</strong><span>${esc(values(row.translations).map(clean).filter(Boolean).join("；"))}</span></div>`).join("");
+    return `<details class="dictionary-extra" open><summary><span>常用词组</span><span class="source-badge">${rows.length}</span></summary><div class="dictionary-extra-body">${body}</div></details>`;
+  }
+
+  function renderRelatedWords(words) {
+    const rows = values(words).filter(row => row && typeof row === "object" && clean(row.word)).slice(0, 32);
+    if (!rows.length) return "";
+    const body = rows.map(row => `<div class="dictionary-phrase-row"><strong>${esc(row.word)}</strong><span>${esc(values(row.translations).map(clean).filter(Boolean).join("；"))}</span></div>`).join("");
+    return `<details class="dictionary-extra"><summary><span>相关词</span><span class="source-badge">${rows.length}</span></summary><div class="dictionary-extra-body">${body}</div></details>`;
+  }
+
+  function renderWebTranslations(rows) {
+    const items = values(rows).filter(row => row && typeof row === "object" && clean(row.word)).slice(0, 32);
+    if (!items.length) return "";
+    const body = items.map(row => `<div class="dictionary-phrase-row"><strong>${esc(row.word)}</strong><span>${esc(values(row.translations).map(clean).filter(Boolean).join("；"))}</span></div>`).join("");
+    return `<details class="dictionary-extra"><summary><span>网页常用译法</span><span class="source-badge">${items.length}</span></summary><div class="dictionary-extra-body">${body}</div></details>`;
+  }
+
+  function renderDictionaryTags(tags) {
+    const rows = values(tags).map(clean).filter(Boolean);
+    return rows.length ? `<div class="dictionary-tags">${rows.map(tag => `<span>${esc(tag)}</span>`).join("")}</div>` : "";
   }
 
   function renderWordForms(forms) {
@@ -324,14 +375,19 @@
     const sourceMeta = entry.source
       ? `<div class="dictionary-source-row"><span>${source}${entry.source.license ? ` · ${esc(entry.source.license)}` : ""}</span></div>`
       : "";
-    return `<div class="dictionary-entry result-body"><div class="word-head"><strong>${esc(entry.word)}</strong>${entry.phonetic ? `<span class="phonetic">${esc(entry.phonetic)}</span>` : ""}${audio}</div>${renderWordForms(entry.wordForms)}<div class="detail-heading">详细释义</div>${groups.map(group => `<section class="meaning-group"><div class="meaning-heading"><strong>${esc(partOfSpeechLabel(group.partOfSpeech))}</strong><span>${group.senses.length} 个义项</span></div>${group.senses.map((sense, index) => renderSense(sense, index)).join("")}</section>`).join("")}${sourceMeta}</div>`;
+    return `<div class="dictionary-entry result-body"><div class="word-head"><strong>${esc(entry.word)}</strong>${entry.phonetic ? `<span class="phonetic">${esc(entry.phonetic)}</span>` : ""}${audio}</div>${renderDictionaryTags(entry.tags)}${renderWordForms(entry.wordForms)}<div class="detail-heading">详细释义</div>${groups.map(group => `<section class="meaning-group"><div class="meaning-heading"><strong>${esc(partOfSpeechLabel(group.partOfSpeech))}</strong><span>${group.senses.length} 个义项</span></div>${group.senses.map((sense, index) => renderSense(sense, index)).join("")}</section>`).join("")}${renderDictionaryExamples(entry.examples)}${renderDictionaryPhrases(entry.phrases)}${renderRelatedWords(entry.relatedWords)}${renderWebTranslations(entry.webTranslations)}${sourceMeta}</div>`;
   }
 
   function renderCloudResult(result) {
     const translations = values(result.translations).map(esc).join("<br>") || "服务没有返回译文";
     const provider = esc(result.name || result.provider || "云端服务");
     const language = `${result.detectedSource ? `${esc(result.detectedSource)} → ` : ""}${esc(state.settings?.translation?.target || "zh-CN")}`;
-    return `<div class="cloud-result"><div class="cloud-translation">${translations}</div><div class="cloud-result-footer"><span>${language}</span><span class="provider-attribution">${provider}${result.mode === "web" ? " · 兼容模式" : ""}</span>${copyButton("cloud", "复制本条直接释义")}</div></div>`;
+    const examples = values(result.examples).filter(row => row && typeof row === "object" && clean(row.example)).slice(0, 6);
+    const exampleHtml = examples.length
+      ? `<div class="translation-examples">${examples.map(row => `<div><span>${esc(clean(row.example))}</span>${clean(row.translation) ? `<small>${esc(row.translation)}</small>` : ""}</div>`).join("")}</div>`
+      : "";
+    const compatible = result.provider === "google" && result.mode === "web" ? " · 兼容模式" : "";
+    return `<div class="cloud-result"><div class="cloud-translation">${translations}</div>${exampleHtml}<div class="cloud-result-footer"><span>${language}</span><span class="provider-attribution">${provider}${compatible}</span>${copyButton("cloud", "复制本条直接释义")}</div></div>`;
   }
 
   function renderCloudReference(results, dictionaryMode = false) {
@@ -371,7 +427,7 @@
       content = `<div class="result-body">${renderCloudReference(result.cloudResults)}${renderSuggestions(result.suggestions)}</div>`;
     } else {
       const configured = values(result.providers).length > 0;
-      content = `<div class="notice ${configured ? "warning" : ""}"><strong>${configured ? "云端没有返回结果" : "未配置可用的云端服务"}</strong>${configured ? "请检查网络或展开下方错误信息。" : "在设置中启用 Google 兼容模式，或填写 Google Cloud / 有道 / 百度凭据。"}${renderSuggestions(result.suggestions)}</div>`;
+      content = `<div class="notice ${configured ? "warning" : ""}"><strong>${configured ? "云端没有返回结果" : "未配置可用的云端服务"}</strong>${configured ? "请检查网络或展开下方错误信息。" : "在设置中启用网易有道网页服务或 Google 兼容模式，也可以填写百度凭据。"}${renderSuggestions(result.suggestions)}</div>`;
     }
     return `<section class="result-block">${heading}${content}${warningDetails(result.warnings)}</section>`;
   }
@@ -580,9 +636,6 @@
     setChecked("google-enabled", translation.google?.enabled);
     setField("google-mode", translation.google?.mode || (translation.google?.apiKey ? "cloud" : "web"));
     setField("google-api-key", translation.google?.apiKey || "");
-    setChecked("youdao-enabled", translation.youdao?.enabled);
-    setField("youdao-app-key", translation.youdao?.appKey || "");
-    setField("youdao-app-secret", translation.youdao?.appSecret || "");
     setChecked("baidu-enabled", translation.baidu?.enabled);
     setField("baidu-api-key", translation.baidu?.apiKey || "");
     setField("baidu-secret-key", translation.baidu?.secretKey || "");
@@ -604,7 +657,6 @@
     settings.dictionary.freeDictionary ||= {};
     settings.translation ||= {};
     settings.translation.google ||= {};
-    settings.translation.youdao ||= {};
     settings.translation.baidu ||= {};
     settings.behavior ||= {};
     settings.appearance ||= {};
@@ -615,9 +667,6 @@
     settings.translation.google.enabled = $("#google-enabled").checked;
     settings.translation.google.mode = $("#google-mode").value || "web";
     settings.translation.google.apiKey = clean($("#google-api-key").value);
-    settings.translation.youdao.enabled = $("#youdao-enabled").checked;
-    settings.translation.youdao.appKey = clean($("#youdao-app-key").value);
-    settings.translation.youdao.appSecret = clean($("#youdao-app-secret").value);
     settings.translation.baidu.enabled = $("#baidu-enabled").checked;
     settings.translation.baidu.apiKey = clean($("#baidu-api-key").value);
     settings.translation.baidu.secretKey = clean($("#baidu-secret-key").value);
@@ -711,10 +760,6 @@
       }
       if (next.translation.google.enabled && next.translation.google.mode === "cloud" && !next.translation.google.apiKey) {
         $("#settings-status").textContent = "请填写 Google Cloud Key";
-        return;
-      }
-      if (next.translation.youdao.enabled && (!next.translation.youdao.appKey || !next.translation.youdao.appSecret)) {
-        $("#settings-status").textContent = "请填写有道凭据";
         return;
       }
       if (next.translation.baidu.enabled && (!next.translation.baidu.apiKey || !next.translation.baidu.secretKey)) {
