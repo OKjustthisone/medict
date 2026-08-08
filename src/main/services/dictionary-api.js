@@ -46,6 +46,7 @@ async function fetchJson(url, options = {}, timeout = DEFAULT_TIMEOUT) {
     if (!response.ok) {
       const error = new Error(data?.message || data?.error?.message || `${response.status} ${response.statusText}`);
       error.status = response.status;
+      error.providerCode = data?.error_code || data?.errorCode || data?.error?.code || "";
       throw error;
     }
     return data;

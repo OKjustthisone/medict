@@ -3,6 +3,10 @@ const path = require("node:path");
 
 const DEFAULT_SETTINGS = {
   dictionary: {
+    freeDictionary: {
+      enabled: true
+    },
+    serviceOrder: ["baidu", "freeDictionary", "google", "youdao"],
     oxford: {
       enabled: false,
       appId: "",
@@ -54,6 +58,12 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function normalizeDictionaryServiceOrder(value) {
+  const defaultOrder = DEFAULT_SETTINGS.dictionary.serviceOrder;
+  const requested = Array.isArray(value) ? value : [];
+  return [...new Set(requested.filter(item => defaultOrder.includes(item))), ...defaultOrder.filter(item => !requested.includes(item))];
+}
+
 function mergeSettings(value) {
   const source = value && typeof value === "object" ? value : {};
   return {
@@ -62,6 +72,11 @@ function mergeSettings(value) {
     dictionary: {
       ...clone(DEFAULT_SETTINGS.dictionary),
       ...(source.dictionary || {}),
+      freeDictionary: {
+        ...clone(DEFAULT_SETTINGS.dictionary.freeDictionary),
+        ...(source.dictionary?.freeDictionary || {})
+      },
+      serviceOrder: normalizeDictionaryServiceOrder(source.dictionary?.serviceOrder),
       oxford: {
         ...clone(DEFAULT_SETTINGS.dictionary.oxford),
         ...(source.dictionary?.oxford || {})
@@ -139,6 +154,7 @@ class SettingsStore {
 
 module.exports = {
   DEFAULT_SETTINGS,
+  normalizeDictionaryServiceOrder,
   SettingsStore,
   mergeSettings
 };

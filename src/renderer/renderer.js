@@ -12,6 +12,14 @@
     activeMode: "word"
   };
 
+  const dictionaryServices = [
+    { id: "baidu", label: "百度词典版" },
+    { id: "freeDictionary", label: "Free Dictionary" },
+    { id: "google", label: "Google" },
+    { id: "youdao", label: "有道智云" }
+  ];
+  const defaultDictionaryServiceOrder = dictionaryServices.map(service => service.id);
+
   const $ = selector => document.querySelector(selector);
   const esc = value => String(value ?? "").replace(/[&<>"']/g, character => ({
     "&": "&amp;",
@@ -26,6 +34,21 @@
     const items = values(value).map(clean).filter(Boolean);
     return items.length ? items.join("；") : "—";
   };
+
+  function normalizeDictionaryServiceOrder(order) {
+    const requested = Array.isArray(order) ? order : [];
+    return [...new Set(requested.filter(id => defaultDictionaryServiceOrder.includes(id))), ...defaultDictionaryServiceOrder.filter(id => !requested.includes(id))];
+  }
+
+  function renderDictionaryServiceOrder(order = state.settings?.dictionary?.serviceOrder) {
+    const container = $("#dictionary-service-order");
+    if (!container) return;
+    const normalized = normalizeDictionaryServiceOrder(order);
+    container.innerHTML = normalized.map((id, index) => {
+      const service = dictionaryServices.find(item => item.id === id);
+      return `<div class="service-order-row" data-service-id="${esc(id)}"><span class="service-order-index">${index + 1}</span><strong>${esc(service?.label || id)}</strong><div class="service-order-actions"><button type="button" class="order-button" data-service-move="up" aria-label="上移" title="上移"${index === 0 ? " disabled" : ""}>↑</button><button type="button" class="order-button" data-service-move="down" aria-label="下移" title="下移"${index === normalized.length - 1 ? " disabled" : ""}>↓</button></div></div>`;
+    }).join("");
+  }
 
   function setRequestStatus(message = "", kind = "") {
     const element = $("#request-status");
@@ -185,7 +208,7 @@
     const localMessage = localCount
       ? `已加载 ${localCount.toLocaleString()} 条本地词条；精确命中时不会访问云端。`
       : "当前未安装本地词典；英文单词会查询在线词典，再用 Google / 有道补充中文释义。";
-    $("#results").innerHTML = `<div class="empty-state"><div><span class="empty-state-icon">M</span><strong>一个输入框，两种查询</strong><p>${esc(localMessage)} 鼠标划词时，两种查询会同时执行。</p></div></div>`;
+    $("#results").innerHTML = `<div class="empty-state"><div><span class="empty-state-icon" aria-hidden="true"><svg viewBox="0 0 64 64"><rect x="2" y="2" width="60" height="60" rx="16" fill="#4c72e8"/><g fill="none" stroke="#fff" stroke-linecap="round" stroke-width="3.1" opacity=".94"><ellipse cx="32" cy="32" rx="23" ry="9"/><ellipse cx="32" cy="32" rx="23" ry="9" transform="rotate(60 32 32)"/><ellipse cx="32" cy="32" rx="23" ry="9" transform="rotate(-60 32 32)"/></g><circle cx="32" cy="32" r="6.5" fill="#e9fbff"/><circle cx="32" cy="32" r="3.5" fill="#27a9d4"/></svg></span><strong>一个输入框，两种查询</strong><p>${esc(localMessage)} 鼠标划词时，两种查询会同时执行。</p></div></div>`;
   }
 
   function loadingBlock(label, query) {
@@ -251,13 +274,10 @@
     return `<div class="sense-related"><span>${esc(label)}</span>${rows.map(item => `<em>${esc(item)}</em>`).join("")}</div>`;
   }
 
-  function renderSense(sense, index, providerName = "") {
+  function renderSense(sense, index) {
     const translations = values(sense.translations).map(clean).filter(Boolean);
     const examples = values(sense.examples).map(clean).filter(Boolean);
-    const attribution = translations.length && providerName
-      ? `<span class="provider-attribution">${esc(providerName)}</span>`
-      : "";
-    return `<div class="sense"><span class="sense-number">${index + 1}</span><div class="sense-copy">${translations.length ? `<div class="sense-translation">${translations.map(esc).join("；")}</div>` : ""}<div class="definition">${esc(sense.definition || "暂无英文释义")}</div>${examples.length ? `<div class="example">${examples.map(example => `<div><span>例</span>${esc(example)}</div>`).join("")}</div>` : ""}${renderRelated("近义", sense.synonyms)}${renderRelated("反义", sense.antonyms)}<div class="sense-footer">${attribution}${copyButton("sense", "复制本条释义")}</div></div></div>`;
+    return `<div class="sense"><span class="sense-number">${index + 1}</span><div class="sense-copy">${translations.length ? `<div class="sense-translation">${translations.map(esc).join("；")}</div>` : ""}<div class="definition">${esc(sense.definition || "暂无英文释义")}</div>${examples.length ? `<div class="example">${examples.map(example => `<div><span>例</span>${esc(example)}</div>`).join("")}</div>` : ""}${renderRelated("近义", sense.synonyms)}${renderRelated("反义", sense.antonyms)}<div class="sense-footer">${copyButton("sense", "复制本条释义")}</div></div></div>`;
   }
 
   function renderWordForms(forms) {
@@ -285,8 +305,7 @@
     const sourceMeta = entry.source
       ? `<div class="dictionary-source-row"><span>${source}${entry.source.license ? ` · ${esc(entry.source.license)}` : ""}</span></div>`
       : "";
-    const providerName = entry.translationProvider?.name || "";
-    return `<div class="dictionary-entry result-body"><div class="word-head"><strong>${esc(entry.word)}</strong>${entry.phonetic ? `<span class="phonetic">${esc(entry.phonetic)}</span>` : ""}${audio}</div>${renderWordForms(entry.wordForms)}<div class="detail-heading">详细释义</div>${groups.map(group => `<section class="meaning-group"><div class="meaning-heading"><strong>${esc(partOfSpeechLabel(group.partOfSpeech))}</strong><span>${group.senses.length} 个义项</span></div>${group.senses.map((sense, index) => renderSense(sense, index, providerName)).join("")}</section>`).join("")}${sourceMeta}</div>`;
+    return `<div class="dictionary-entry result-body"><div class="word-head"><strong>${esc(entry.word)}</strong>${entry.phonetic ? `<span class="phonetic">${esc(entry.phonetic)}</span>` : ""}${audio}</div>${renderWordForms(entry.wordForms)}<div class="detail-heading">详细释义</div>${groups.map(group => `<section class="meaning-group"><div class="meaning-heading"><strong>${esc(partOfSpeechLabel(group.partOfSpeech))}</strong><span>${group.senses.length} 个义项</span></div>${group.senses.map((sense, index) => renderSense(sense, index)).join("")}</section>`).join("")}${sourceMeta}</div>`;
   }
 
   function renderCloudResult(result) {
@@ -529,7 +548,9 @@
   function fillSettings() {
     const settings = state.settings || {};
     const translation = settings.translation || {};
+    const dictionary = settings.dictionary || {};
     setChecked("selection-enabled", settings.behavior?.selectionLookup);
+    setChecked("free-dictionary-enabled", dictionary.freeDictionary?.enabled !== false);
     setChecked("google-enabled", translation.google?.enabled);
     setField("google-mode", translation.google?.mode || (translation.google?.apiKey ? "cloud" : "web"));
     setField("google-api-key", translation.google?.apiKey || "");
@@ -546,11 +567,14 @@
     setChecked("hide-on-close", settings.window?.hideOnClose !== false);
     $("#settings-status").textContent = "";
     renderDictionarySources();
+    renderDictionaryServiceOrder(dictionary.serviceOrder);
     updateGoogleMode();
   }
 
   function readSettings() {
     const settings = JSON.parse(JSON.stringify(state.settings || {}));
+    settings.dictionary ||= {};
+    settings.dictionary.freeDictionary ||= {};
     settings.translation ||= {};
     settings.translation.google ||= {};
     settings.translation.youdao ||= {};
@@ -570,6 +594,10 @@
     settings.translation.baidu.enabled = $("#baidu-enabled").checked;
     settings.translation.baidu.apiKey = clean($("#baidu-api-key").value);
     settings.translation.baidu.secretKey = clean($("#baidu-secret-key").value);
+    settings.dictionary.freeDictionary.enabled = $("#free-dictionary-enabled").checked;
+    settings.dictionary.serviceOrder = [...document.querySelectorAll("#dictionary-service-order .service-order-row")]
+      .map(row => row.dataset.serviceId)
+      .filter(Boolean);
     settings.behavior.selectionLookup = $("#selection-enabled").checked;
     settings.behavior.selectionMaxLength = Number(settings.behavior.selectionMaxLength) || 500;
     settings.appearance.fontScale = Math.max(100, Math.min(145, Number($("#font-scale").value) || 115));
@@ -622,6 +650,18 @@
       $("#settings-dialog").close();
     });
     $("#google-mode").addEventListener("change", updateGoogleMode);
+    $("#dictionary-service-order").addEventListener("click", event => {
+      const button = event.target.closest("[data-service-move]");
+      if (!button || button.disabled) return;
+      const rows = [...document.querySelectorAll("#dictionary-service-order .service-order-row")];
+      const index = rows.indexOf(button.closest(".service-order-row"));
+      const direction = button.dataset.serviceMove === "up" ? -1 : 1;
+      const nextIndex = index + direction;
+      if (index < 0 || nextIndex < 0 || nextIndex >= rows.length) return;
+      const order = rows.map(row => row.dataset.serviceId);
+      [order[index], order[nextIndex]] = [order[nextIndex], order[index]];
+      renderDictionaryServiceOrder(order);
+    });
     $("#font-scale").addEventListener("change", event => applyFontScale(event.target.value));
     document.querySelectorAll(".shortcut-input").forEach(bindShortcutRecorder);
     document.querySelectorAll("[data-clear-shortcut]").forEach(button => {

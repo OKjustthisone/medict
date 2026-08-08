@@ -9,9 +9,9 @@ const { normalizeAccelerator, registerShortcutConfiguration, validateShortcutCon
 const { normalizeFreeDictionary, normalizeMerriamItem } = require("../src/main/services/dictionary-api");
 const { chooseChemblCandidate, hasDrugIdentity } = require("../src/main/services/drugshop");
 const { parseSelectionLine } = require("../src/main/selection-monitor");
-const { lookupWord } = require("../src/main/services/word-lookup");
-const { buildYoudaoPayload, normalizeBaiduDictionary, targetForBaidu } = require("../src/main/services/translation");
-const { mergeSettings } = require("../src/main/store");
+const { lookupWord, sortByServiceOrder } = require("../src/main/services/word-lookup");
+const { buildYoudaoPayload, createBaiduError, normalizeBaiduDictionary, targetForBaidu } = require("../src/main/services/translation");
+const { mergeSettings, normalizeDictionaryServiceOrder } = require("../src/main/store");
 
 test("normalizes a local bilingual dictionary entry", () => {
   const entry = normalizeEntry({
@@ -109,6 +109,13 @@ test("normalizes Baidu dictionary data into phonetics, senses and word forms", (
   assert.deepEqual(entry.senses.find(sense => sense.partOfSpeech === "noun").translations, ["风扇", "粉丝"]);
   assert.ok(entry.senses.some(sense => sense.partOfSpeech === "verb" && sense.translations[0] === "扇动"));
   assert.equal(entry.senses[0].examples[0], "The fan kept the room cool.");
+});
+
+test("explains Baidu rate-limit errors with an actionable message", () => {
+  const error = createBaiduError(18, "Open api qps request limit reached");
+  assert.equal(error.baiduCode, "18");
+  assert.match(error.message, /QPS 超限/);
+  assert.match(error.message, /自动排队并重试/);
 });
 
 test("normalizes a Merriam-Webster response shape", () => {
@@ -279,6 +286,32 @@ test("prefers a Baidu dictionary payload and keeps other providers as translatio
   assert.deepEqual(result.cloudResults.map(item => item.provider), ["google"]);
 });
 
+test("keeps Free Dictionary optional and sorts dictionary services by the configured order", async () => {
+  assert.deepEqual(normalizeDictionaryServiceOrder(["youdao", "baidu", "youdao"]), ["youdao", "baidu", "freeDictionary", "google"]);
+  const ordered = sortByServiceOrder([
+    { provider: "google" },
+    { provider: "free-dictionary" },
+    { provider: "baidu-dictionary" },
+    { provider: "youdao" }
+  ], mergeSettings({ dictionary: { serviceOrder: ["freeDictionary", "youdao", "baidu", "google"] } }));
+  assert.deepEqual(ordered.map(item => item.provider), ["free-dictionary", "youdao", "baidu-dictionary", "google"]);
+
+  let dictionaryCalls = 0;
+  const result = await lookupWord("fan", {
+    dictionaryManager: {
+      searchLocal: async () => ({ exactResults: [], suggestions: [], warnings: [], sources: [] })
+    },
+    settings: mergeSettings({ dictionary: { freeDictionary: { enabled: false } } }),
+    queryDictionary: async () => {
+      dictionaryCalls += 1;
+      return null;
+    },
+    translate: async () => ({ results: [], warnings: [] })
+  });
+  assert.equal(dictionaryCalls, 0);
+  assert.equal(result.dictionaryResults.length, 0);
+});
+
 test("decodes UTF-8 selection messages from the Windows helper", () => {
   const encoded = Buffer.from("aspirin 阿司匹林", "utf8").toString("base64");
   assert.deepEqual(parseSelectionLine(`TEXT\t${encoded}`), {
@@ -325,6 +358,8 @@ test("defaults to automatic selection and Google web fallback without storing a 
   const settings = mergeSettings({});
   assert.equal(settings.behavior.selectionLookup, true);
   assert.equal(settings.appearance.fontScale, 115);
+  assert.equal(settings.dictionary.freeDictionary.enabled, true);
+  assert.deepEqual(settings.dictionary.serviceOrder, ["baidu", "freeDictionary", "google", "youdao"]);
   assert.equal(settings.shortcuts.showWindow, "CommandOrControl+Alt+M");
   assert.equal(settings.shortcuts.selectionLookup, "CommandOrControl+Alt+D");
   assert.equal(settings.translation.google.enabled, true);

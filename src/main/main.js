@@ -1,4 +1,5 @@
 const path = require("node:path");
+const fs = require("node:fs");
 const {
   app,
   BrowserWindow,
@@ -34,6 +35,24 @@ let isQuitting = false;
 let temporarySelectionTop = false;
 let shortcutCaptureInFlight = false;
 let shortcutsSuspended = false;
+
+const ATOM_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect x="2" y="2" width="60" height="60" rx="16" fill="#4c72e8"/><g fill="none" stroke="#fff" stroke-linecap="round" stroke-width="3.1" opacity=".94"><ellipse cx="32" cy="32" rx="23" ry="9"/><ellipse cx="32" cy="32" rx="23" ry="9" transform="rotate(60 32 32)"/><ellipse cx="32" cy="32" rx="23" ry="9" transform="rotate(-60 32 32)"/></g><circle cx="32" cy="32" r="6.5" fill="#e9fbff"/><circle cx="32" cy="32" r="3.5" fill="#27a9d4"/></svg>`;
+
+function appIconPath() {
+  const candidates = app.isPackaged
+    ? [path.join(process.resourcesPath, "medict.ico"), path.join(app.getAppPath(), "build", "medict.ico")]
+    : [path.join(app.getAppPath(), "build", "medict.ico")];
+  return candidates.find(candidate => fs.existsSync(candidate)) || "";
+}
+
+function createAppIcon() {
+  const filePath = appIconPath();
+  if (filePath) {
+    const icon = nativeImage.createFromPath(filePath);
+    if (!icon.isEmpty()) return icon;
+  }
+  return nativeImage.createFromDataURL(`data:image/svg+xml;base64,${Buffer.from(ATOM_ICON_SVG).toString("base64")}`);
+}
 
 function sendToRenderer(channel, value) {
   if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
@@ -345,6 +364,7 @@ function createWindow() {
     alwaysOnTop: Boolean(settings.window?.alwaysOnTop),
     backgroundColor: "#f5f5f3",
     title: "Medict",
+    icon: createAppIcon(),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -388,7 +408,7 @@ function updateTrayMenu() {
 }
 
 function createTray() {
-  const icon = nativeImage.createFromBuffer(Buffer.from(TRAY_ICON_BASE64, "base64"));
+  const icon = createAppIcon();
   tray = new Tray(icon);
   tray.setToolTip("Medict · 本地优先查词与药物查询");
   tray.on("click", () => {

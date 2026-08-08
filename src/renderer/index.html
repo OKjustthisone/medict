@@ -14,7 +14,7 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3h8l-1 6 3 3v2h-5v7l-1 1-1-1v-7H6v-2l3-3-1-6Z"/></svg>
       </button>
       <div class="title-copy">
-        <span class="app-mark">M</span>
+        <span class="app-mark" aria-hidden="true"><svg viewBox="0 0 64 64"><rect x="2" y="2" width="60" height="60" rx="16" fill="#4c72e8"/><g fill="none" stroke="#fff" stroke-linecap="round" stroke-width="3.1" opacity=".94"><ellipse cx="32" cy="32" rx="23" ry="9"/><ellipse cx="32" cy="32" rx="23" ry="9" transform="rotate(60 32 32)"/><ellipse cx="32" cy="32" rx="23" ry="9" transform="rotate(-60 32 32)"/></g><circle cx="32" cy="32" r="6.5" fill="#e9fbff"/><circle cx="32" cy="32" r="3.5" fill="#27a9d4"/></svg></span>
         <span>Medict</span>
       </div>
       <div class="title-actions">
@@ -116,7 +116,7 @@
 
           <div class="provider-card dictionary-provider-card">
             <div class="provider-title-row">
-              <div class="provider-check"><span class="provider-logo dictionary-logo">D</span><strong>Free Dictionary</strong></div>
+              <label class="provider-check"><input id="free-dictionary-enabled" type="checkbox"><span class="provider-logo dictionary-logo">D</span><strong>Free Dictionary</strong></label>
               <span class="source-badge">免密钥</span>
             </div>
             <p class="provider-help">免密钥英文词典，自动返回音标、词性、多义项、例句和近反义词；启用百度词典版后优先显示百度的中英词典数据。</p>
@@ -156,6 +156,12 @@
               <label class="field">应用 ID<input id="youdao-app-key" type="text" autocomplete="off"></label>
               <label class="field">应用密钥<input id="youdao-app-secret" type="password" autocomplete="off"></label>
             </div>
+          </div>
+
+          <div class="service-order-panel">
+            <div class="order-heading"><strong>词典服务顺序</strong><span>本地词典固定最前</span></div>
+            <p class="provider-help">主面板会按此顺序显示在线词典和翻译结果，可用上下按钮调整。</p>
+            <div id="dictionary-service-order" class="service-order"></div>
           </div>
 
           <label class="field compact-field">默认目标语言

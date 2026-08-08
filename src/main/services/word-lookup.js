@@ -1,8 +1,34 @@
 const { isEnglishDictionaryQuery, queryFreeDictionary } = require("./dictionary-api");
 const { translateSegments, translateText } = require("./translation");
 
+const DEFAULT_SERVICE_ORDER = ["baidu", "freeDictionary", "google", "youdao"];
+
 function clean(value) {
   return String(value ?? "").trim();
+}
+
+function serviceIdForResult(result) {
+  const provider = clean(result?.provider).toLowerCase();
+  if (provider.includes("baidu")) return "baidu";
+  if (provider === "free-dictionary") return "freeDictionary";
+  if (provider.includes("google")) return "google";
+  if (provider.includes("youdao")) return "youdao";
+  return provider;
+}
+
+function serviceOrder(settings = {}) {
+  const configured = settings.dictionary?.serviceOrder;
+  const requested = Array.isArray(configured) ? configured : [];
+  return [...new Set(requested.filter(item => DEFAULT_SERVICE_ORDER.includes(item))), ...DEFAULT_SERVICE_ORDER.filter(item => !requested.includes(item))];
+}
+
+function sortByServiceOrder(results, settings = {}) {
+  const rank = new Map(serviceOrder(settings).map((id, index) => [id, index]));
+  return [...(results || [])].sort((left, right) => {
+    const leftRank = rank.get(serviceIdForResult(left));
+    const rightRank = rank.get(serviceIdForResult(right));
+    return (leftRank ?? 999) - (rightRank ?? 999);
+  });
 }
 
 function configuredCloudProviders(settings = {}) {
@@ -17,7 +43,7 @@ function configuredCloudProviders(settings = {}) {
   if (translation.baidu?.enabled && translation.baidu.apiKey && translation.baidu.secretKey) {
     providers.unshift("baidu");
   }
-  return providers;
+  return sortByServiceOrder(providers.map(provider => ({ provider })), settings).map(item => item.provider);
 }
 
 function enrichDictionaryEntry(entry, segmentResult = {}) {
@@ -69,7 +95,7 @@ async function lookupWord(query, options = {}) {
 
   let dictionaryWarning = "";
   const [dictionaryEntry, cloud] = await Promise.all([
-    isEnglishDictionaryQuery(value)
+    isEnglishDictionaryQuery(value) && settings.dictionary?.freeDictionary?.enabled !== false
       ? lookupOnlineDictionary(value).catch(error => {
         dictionaryWarning = `在线词典：${error.message}`;
         return null;
@@ -87,12 +113,11 @@ async function lookupWord(query, options = {}) {
   }
 
   const baiduDictionary = (cloud.results || []).find(item => item?.dictionaryEntry)?.dictionaryEntry || null;
-  const dictionaryResults = baiduDictionary
-    ? [baiduDictionary]
-    : enrichedDictionary
-      ? [enrichedDictionary]
-      : [];
-  const cloudResults = (cloud.results || []).filter(item => !item?.dictionaryEntry);
+  const dictionaryResults = sortByServiceOrder([
+    ...(baiduDictionary ? [baiduDictionary] : []),
+    ...(enrichedDictionary ? [enrichedDictionary] : [])
+  ], settings);
+  const cloudResults = sortByServiceOrder((cloud.results || []).filter(item => !item?.dictionaryEntry), settings);
   return {
     type: "word",
     query: value,
@@ -118,5 +143,7 @@ async function lookupWord(query, options = {}) {
 module.exports = {
   configuredCloudProviders,
   enrichDictionaryEntry,
-  lookupWord
+  lookupWord,
+  serviceIdForResult,
+  sortByServiceOrder
 };

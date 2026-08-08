@@ -75,6 +75,7 @@ button:disabled { cursor: wait; opacity: .62; }
   font-size: 11px;
   font-weight: 700;
 }
+.app-mark svg { width: 18px; height: 18px; display: block; }
 
 .title-actions { display: flex; align-items: center; }
 
@@ -253,6 +254,7 @@ button:disabled { cursor: wait; opacity: .62; }
   font-size: 19px;
   font-weight: 700;
 }
+.empty-state-icon svg { width: 30px; height: 30px; display: block; }
 
 .empty-state strong { display: block; color: #555960; font-size: 13px; }
 .empty-state p { max-width: 280px; margin: 6px 0 0; font-size: 11px; line-height: 1.6; }
@@ -500,6 +502,16 @@ kbd { padding: 1px 4px; border: 1px solid #d5d6d4; border-bottom-width: 2px; bor
 .baidu-logo { color: white; background: #4d6fe8; }
 .provider-title-row select { max-width: 150px; height: 27px; padding: 0 5px; border: 1px solid #dcdddb; border-radius: 6px; color: #666a70; background: #f8f8f6; font-size: 9px; }
 .provider-help { margin: 7px 0 0; color: #95989c; font-size: 8px; line-height: 1.45; }
+.service-order-panel { margin-top: 11px; padding: 10px; border: 1px dashed #dfe1e0; border-radius: 9px; background: #f8f8f6; }
+.order-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #5b6067; font-size: 10px; }
+.order-heading span { color: #9a9da1; font-size: 8px; }
+.service-order { display: grid; gap: 5px; margin-top: 8px; }
+.service-order-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 6px; min-height: 29px; padding: 4px 5px; border-radius: 6px; color: #60656b; background: white; font-size: 9px; }
+.service-order-index { display: grid; width: 17px; height: 17px; place-items: center; border-radius: 50%; color: #65749a; background: #eff2f9; font-size: 8px; font-weight: 700; }
+.service-order-actions { display: flex; gap: 3px; }
+.order-button { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 5px; color: #68707b; background: #eceeec; font-size: 12px; line-height: 1; }
+.order-button:hover:not(:disabled) { color: var(--blue-deep); background: var(--blue-soft); }
+.order-button:disabled { cursor: default; opacity: .35; }
 
 .field { display: grid; gap: 4px; margin-top: 9px; color: #7d8187; font-size: 9px; }
 .field input, .field select {

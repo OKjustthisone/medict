@@ -33,7 +33,26 @@ function inputForYoudao(value) {
 const BAIDU_TOKEN_URL = "https://aip.baidubce.com/oauth/2.0/token";
 const BAIDU_DICTIONARY_URL = "https://aip.baidubce.com/rpc/2.0/mt/texttrans-with-dict/v1";
 const BAIDU_DICTIONARY_DOC_URL = "https://cloud.baidu.com/doc/MT/s/nkqrzmbpc";
+const BAIDU_MIN_REQUEST_INTERVAL_MS = 1100;
 const baiduTokenCache = new Map();
+const baiduRequestState = new Map();
+
+const BAIDU_ERROR_MESSAGES = {
+  4: "百度服务集群当前限流，不代表本应用额度已经用完；请稍后重试",
+  6: "当前应用没有该接口权限，请确认已开通文本翻译-词典版",
+  18: "百度接口 QPS 超限；标准版通常需要间隔请求，应用会自动排队并重试一次",
+  19: "百度账号或服务的总请求量/字符额度已用完",
+  100: "Access Token 无效，请检查百度 API Key 和 Secret Key",
+  110: "Access Token 无效或已失效",
+  111: "Access Token 已过期",
+  20003: "请求内容触发百度安全策略",
+  31005: "百度账号用量已超限",
+  31104: "百度接口访问频率受限",
+  31105: "百度不支持当前语种方向",
+  31106: "百度查询文本超过长度限制",
+  282003: "百度接口缺少必要参数",
+  282004: "百度接口参数格式无效"
+};
 
 function targetForBaidu(value) {
   const normalized = clean(value).toLowerCase();
@@ -104,6 +123,49 @@ function parseBaiduDictionary(value) {
     return JSON.parse(String(value));
   } catch (_) {
     return null;
+  }
+}
+
+function createBaiduError(code, message = "") {
+  const normalizedCode = String(code ?? "");
+  const description = BAIDU_ERROR_MESSAGES[normalizedCode] || "百度接口返回错误";
+  const detail = clean(message);
+  const error = new Error(`百度错误码 ${normalizedCode}：${description}${detail && detail !== description ? `（${detail}）` : ""}`);
+  error.baiduCode = normalizedCode;
+  return error;
+}
+
+function baiduRequestKey(config = {}) {
+  return `${clean(config.apiKey)}\u0000${clean(config.secretKey)}`;
+}
+
+function delay(milliseconds) {
+  return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
+function scheduleBaiduRequest(config, task) {
+  const key = baiduRequestKey(config);
+  const state = baiduRequestState.get(key) || { nextAt: 0 };
+  const now = Date.now();
+  const startAt = Math.max(now, state.nextAt);
+  state.nextAt = startAt + BAIDU_MIN_REQUEST_INTERVAL_MS;
+  baiduRequestState.set(key, state);
+  return new Promise((resolve, reject) => {
+    setTimeout(() => {
+      Promise.resolve()
+        .then(task)
+        .then(resolve, reject);
+    }, Math.max(0, startAt - now));
+  });
+}
+
+async function requestBaiduTranslation(config, task) {
+  try {
+    return await scheduleBaiduRequest(config, task);
+  } catch (error) {
+    if (String(error?.baiduCode || error?.providerCode || "") !== "18") throw error;
+    await delay(1200);
+    return scheduleBaiduRequest(config, task);
   }
 }
 
@@ -253,13 +315,16 @@ async function translateBaiduDictionary(text, config = {}) {
   const accessToken = await getBaiduAccessToken(config);
   const source = sourceForBaidu(config.source || (isBaiduDictionaryQuery(queryText) ? "en" : "auto"));
   const target = targetForBaidu(config.target || "zh-CN");
-  const data = await fetchJson(`${BAIDU_DICTIONARY_URL}?access_token=${encodeURIComponent(accessToken)}`, {
+  const data = await requestBaiduTranslation(config, () => fetchJson(`${BAIDU_DICTIONARY_URL}?access_token=${encodeURIComponent(accessToken)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify({ q: queryText, from: source, to: target })
-  }, 20000);
+  }, 20000).catch(error => {
+    if (error?.providerCode) throw createBaiduError(error.providerCode, error.message);
+    throw error;
+  }));
   if (data?.error_code) {
-    throw new Error(`百度错误码 ${data.error_code}${data.error_msg ? `：${data.error_msg}` : ""}`);
+    throw createBaiduError(data.error_code, data.error_msg);
   }
   const result = data?.result || {};
   const rows = Array.isArray(result.trans_result) ? result.trans_result : [];
@@ -528,6 +593,7 @@ async function translateText(text, settings = {}) {
 
 module.exports = {
   buildYoudaoPayload,
+  createBaiduError,
   getBaiduAccessToken,
   inputForYoudao,
   isBaiduDictionaryQuery,
