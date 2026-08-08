@@ -6,7 +6,7 @@ const test = require("node:test");
 const { DictionaryManager, normalizeEntry, parseCsv } = require("../src/main/dictionary-manager");
 const { DrugCache, normalizeDrugCacheKey, SEVEN_DAYS_MS } = require("../src/main/drug-cache");
 const { normalizeAccelerator, registerShortcutConfiguration, validateShortcutConfiguration } = require("../src/main/shortcut-manager");
-const { normalizeFreeDictionary, normalizeMerriamItem } = require("../src/main/services/dictionary-api");
+const { buildYoudaoDictionaryPayload, normalizeFreeDictionary, normalizeMerriamItem, normalizeYoudaoDictionary } = require("../src/main/services/dictionary-api");
 const { chooseChemblCandidate, hasDrugIdentity } = require("../src/main/services/drugshop");
 const { parseSelectionLine } = require("../src/main/selection-monitor");
 const { lookupWord, sortByServiceOrder } = require("../src/main/services/word-lookup");
@@ -167,6 +167,59 @@ test("normalizes Free Dictionary phonetics, parts of speech, homographs and exam
   assert.equal(entry.source.license, "CC BY-SA 3.0");
 });
 
+test("normalizes the Youdao web dictionary into phonetics, senses, forms and bilingual examples", () => {
+  const entry = normalizeYoudaoDictionary({
+    ec: {
+      word: {
+        word: "fan",
+        ukphone: "fæn",
+        usphone: "fæn",
+        ukspeech: "fan",
+        usspeech: "fan",
+        trs: [{ pos: "n.", tran: "风扇" }],
+        wfs: [{ wf: { name: "过去式", value: "fanned" } }]
+      }
+    },
+    collins_primary: {
+      gramcat: [
+        {
+          partofspeech: "noun",
+          senses: [{
+            definition: "someone who likes someone or something very much",
+            word: "粉丝；爱好者",
+            examples: [{ example: "He is a fan of the band.", sense: { word: "他是这个乐队的粉丝。" } }]
+          }, {
+            definition: "a device that moves air around a room",
+            word: "风扇"
+          }]
+        },
+        {
+          partofspeech: "verb",
+          senses: [{ definition: "to move air with a fan", word: "给……扇风" }]
+        }
+      ]
+    },
+    syno: { synos: [{ pos: "noun", ws: [{ w: "admirer" }] }] }
+  }, "fan");
+  const payload = buildYoudaoDictionaryPayload("fan");
+  assert.deepEqual({ q: payload.q, le: payload.le, client: payload.client, keyfrom: payload.keyfrom }, {
+    q: "fan",
+    le: "en",
+    client: "web",
+    keyfrom: "webdict"
+  });
+  assert.equal(payload.t, "0");
+  assert.equal(payload.sign.length, 32);
+  assert.equal(entry.provider, "youdao-dictionary");
+  assert.equal(entry.phonetic, "英 /fæn/  美 /fæn/");
+  assert.equal(entry.audioUrl, "https://dict.youdao.com/dictvoice?audio=fan");
+  assert.deepEqual(entry.wordForms, [{ label: "过去式", values: ["fanned"] }]);
+  assert.equal(entry.senses.length, 3);
+  assert.ok(entry.senses.some(sense => sense.translations.includes("粉丝；爱好者")));
+  assert.deepEqual(entry.senses[0].exampleTranslations, ["他是这个乐队的粉丝。"]);
+  assert.ok(entry.senses[0].synonyms.includes("admirer"));
+});
+
 test("uses an exact local dictionary hit without calling a cloud provider", async () => {
   let cloudCalls = 0;
   let dictionaryCalls = 0;
@@ -199,6 +252,7 @@ test("falls back to enabled cloud lookup when local dictionaries miss", async ()
     },
     settings: mergeSettings({}),
     queryDictionary: async () => null,
+    queryYoudaoDictionary: async () => null,
     translate: async query => {
       cloudCalls += 1;
       return {
@@ -233,6 +287,7 @@ test("combines an online dictionary entry with translated senses and whole-word 
     },
     settings: mergeSettings({}),
     queryDictionary: async () => dictionaryEntry,
+    queryYoudaoDictionary: async () => null,
     translate: async () => ({
       source: "en",
       target: "zh-CN",
@@ -270,6 +325,7 @@ test("prefers a Baidu dictionary payload and keeps other providers as translatio
     },
     settings: mergeSettings({ translation: { baidu: { enabled: true, apiKey: "key", secretKey: "secret" } } }),
     queryDictionary: async () => null,
+    queryYoudaoDictionary: async () => null,
     translate: async () => ({
       source: "en",
       target: "zh-CN",
@@ -287,14 +343,15 @@ test("prefers a Baidu dictionary payload and keeps other providers as translatio
 });
 
 test("keeps Free Dictionary optional and sorts dictionary services by the configured order", async () => {
-  assert.deepEqual(normalizeDictionaryServiceOrder(["youdao", "baidu", "youdao"]), ["youdao", "baidu", "freeDictionary", "google"]);
+  assert.deepEqual(normalizeDictionaryServiceOrder(["youdao", "baidu", "youdao"]), ["youdaoDictionary", "youdao", "baidu", "freeDictionary", "google"]);
   const ordered = sortByServiceOrder([
     { provider: "google" },
     { provider: "free-dictionary" },
     { provider: "baidu-dictionary" },
-    { provider: "youdao" }
-  ], mergeSettings({ dictionary: { serviceOrder: ["freeDictionary", "youdao", "baidu", "google"] } }));
-  assert.deepEqual(ordered.map(item => item.provider), ["free-dictionary", "youdao", "baidu-dictionary", "google"]);
+    { provider: "youdao" },
+    { provider: "youdao-dictionary" }
+  ], mergeSettings({ dictionary: { serviceOrder: ["freeDictionary", "youdaoDictionary", "youdao", "baidu", "google"] } }));
+  assert.deepEqual(ordered.map(item => item.provider), ["free-dictionary", "youdao-dictionary", "youdao", "baidu-dictionary", "google"]);
 
   let dictionaryCalls = 0;
   const result = await lookupWord("fan", {
@@ -306,10 +363,46 @@ test("keeps Free Dictionary optional and sorts dictionary services by the config
       dictionaryCalls += 1;
       return null;
     },
+    queryYoudaoDictionary: async () => null,
     translate: async () => ({ results: [], warnings: [] })
   });
   assert.equal(dictionaryCalls, 0);
   assert.equal(result.dictionaryResults.length, 0);
+});
+
+test("queries the Youdao web dictionary independently and keeps dictionary results in service order", async () => {
+  let segmentCalls = 0;
+  const webEntry = {
+    type: "online-dictionary",
+    provider: "youdao-dictionary",
+    name: "网易有道词典",
+    word: "fan",
+    senses: [{ partOfSpeech: "noun", definition: "someone who admires a person", translations: ["粉丝"] }]
+  };
+  const freeEntry = {
+    type: "online-dictionary",
+    provider: "free-dictionary",
+    name: "Free Dictionary",
+    word: "fan",
+    senses: [{ partOfSpeech: "noun", definition: "a device for moving air", translations: [] }]
+  };
+  const result = await lookupWord("fan", {
+    dictionaryManager: {
+      searchLocal: async () => ({ exactResults: [], suggestions: [], warnings: [], sources: [] })
+    },
+    settings: mergeSettings({ dictionary: { serviceOrder: ["google", "youdaoDictionary", "freeDictionary", "baidu", "youdao"] } }),
+    queryYoudaoDictionary: async () => webEntry,
+    queryDictionary: async () => freeEntry,
+    translate: async () => ({ results: [{ provider: "google", name: "Google", translations: ["扇子"] }], warnings: [] }),
+    translateSegments: async texts => {
+      segmentCalls += 1;
+      return { translations: texts.map(() => "风扇"), provider: "google", name: "Google", warnings: [] };
+    }
+  });
+  assert.deepEqual(result.dictionaryResults.map(item => item.provider), ["youdao-dictionary", "free-dictionary"]);
+  assert.deepEqual(result.displayResults.map(item => item.provider), ["google", "youdao-dictionary", "free-dictionary"]);
+  assert.equal(segmentCalls, 1);
+  assert.equal(result.dictionaryResults[1].senses[0].translations[0], "风扇");
 });
 
 test("decodes UTF-8 selection messages from the Windows helper", () => {
@@ -358,8 +451,9 @@ test("defaults to automatic selection and Google web fallback without storing a 
   const settings = mergeSettings({});
   assert.equal(settings.behavior.selectionLookup, true);
   assert.equal(settings.appearance.fontScale, 115);
+  assert.equal(settings.dictionary.youdaoDictionary.enabled, true);
   assert.equal(settings.dictionary.freeDictionary.enabled, true);
-  assert.deepEqual(settings.dictionary.serviceOrder, ["baidu", "freeDictionary", "google", "youdao"]);
+  assert.deepEqual(settings.dictionary.serviceOrder, ["youdaoDictionary", "freeDictionary", "baidu", "google", "youdao"]);
   assert.equal(settings.shortcuts.showWindow, "CommandOrControl+Alt+M");
   assert.equal(settings.shortcuts.selectionLookup, "CommandOrControl+Alt+D");
   assert.equal(settings.translation.google.enabled, true);

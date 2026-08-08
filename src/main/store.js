@@ -3,10 +3,13 @@ const path = require("node:path");
 
 const DEFAULT_SETTINGS = {
   dictionary: {
+    youdaoDictionary: {
+      enabled: true
+    },
     freeDictionary: {
       enabled: true
     },
-    serviceOrder: ["baidu", "freeDictionary", "google", "youdao"],
+    serviceOrder: ["youdaoDictionary", "freeDictionary", "baidu", "google", "youdao"],
     oxford: {
       enabled: false,
       appId: "",
@@ -61,7 +64,14 @@ function clone(value) {
 function normalizeDictionaryServiceOrder(value) {
   const defaultOrder = DEFAULT_SETTINGS.dictionary.serviceOrder;
   const requested = Array.isArray(value) ? value : [];
-  return [...new Set(requested.filter(item => defaultOrder.includes(item))), ...defaultOrder.filter(item => !requested.includes(item))];
+  const selected = [...new Set(requested.filter(item => defaultOrder.includes(item)))];
+  const missing = defaultOrder.filter(item => !selected.includes(item));
+  const firstService = defaultOrder[0];
+  return [
+    ...(missing.includes(firstService) ? [firstService] : []),
+    ...selected,
+    ...missing.filter(item => item !== firstService)
+  ];
 }
 
 function mergeSettings(value) {
@@ -72,6 +82,10 @@ function mergeSettings(value) {
     dictionary: {
       ...clone(DEFAULT_SETTINGS.dictionary),
       ...(source.dictionary || {}),
+      youdaoDictionary: {
+        ...clone(DEFAULT_SETTINGS.dictionary.youdaoDictionary),
+        ...(source.dictionary?.youdaoDictionary || {})
+      },
       freeDictionary: {
         ...clone(DEFAULT_SETTINGS.dictionary.freeDictionary),
         ...(source.dictionary?.freeDictionary || {})

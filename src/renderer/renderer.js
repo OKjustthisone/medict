@@ -13,8 +13,9 @@
   };
 
   const dictionaryServices = [
-    { id: "baidu", label: "百度词典版" },
+    { id: "youdaoDictionary", label: "网易有道词典" },
     { id: "freeDictionary", label: "Free Dictionary" },
+    { id: "baidu", label: "百度词典版" },
     { id: "google", label: "Google" },
     { id: "youdao", label: "有道智云" }
   ];
@@ -37,7 +38,14 @@
 
   function normalizeDictionaryServiceOrder(order) {
     const requested = Array.isArray(order) ? order : [];
-    return [...new Set(requested.filter(id => defaultDictionaryServiceOrder.includes(id))), ...defaultDictionaryServiceOrder.filter(id => !requested.includes(id))];
+    const selected = [...new Set(requested.filter(id => defaultDictionaryServiceOrder.includes(id)))];
+    const missing = defaultDictionaryServiceOrder.filter(id => !selected.includes(id));
+    const firstService = defaultDictionaryServiceOrder[0];
+    return [
+      ...(missing.includes(firstService) ? [firstService] : []),
+      ...selected,
+      ...missing.filter(id => id !== firstService)
+    ];
   }
 
   function renderDictionaryServiceOrder(order = state.settings?.dictionary?.serviceOrder) {
@@ -231,6 +239,10 @@
 
   function sourceBadge(result) {
     if (result.strategy === "local") return result.localResults?.[0]?.source?.name || "本地词典";
+    const firstDisplay = result.displayResults?.[0];
+    if (firstDisplay?.displayType === "cloud") {
+      return firstDisplay.name || firstDisplay.provider || "在线翻译";
+    }
     if (result.dictionaryResults?.length) {
       const dictionary = result.dictionaryResults[0];
       const count = Number(dictionary.meta?.senseCount || dictionary.senses?.length || 0);
@@ -277,7 +289,14 @@
   function renderSense(sense, index) {
     const translations = values(sense.translations).map(clean).filter(Boolean);
     const examples = values(sense.examples).map(clean).filter(Boolean);
-    return `<div class="sense"><span class="sense-number">${index + 1}</span><div class="sense-copy">${translations.length ? `<div class="sense-translation">${translations.map(esc).join("；")}</div>` : ""}<div class="definition">${esc(sense.definition || "暂无英文释义")}</div>${examples.length ? `<div class="example">${examples.map(example => `<div><span>例</span>${esc(example)}</div>`).join("")}</div>` : ""}${renderRelated("近义", sense.synonyms)}${renderRelated("反义", sense.antonyms)}<div class="sense-footer">${copyButton("sense", "复制本条释义")}</div></div></div>`;
+    const exampleTranslations = Array.isArray(sense.exampleTranslations)
+      ? sense.exampleTranslations.map(clean)
+      : [];
+    const exampleRows = examples.map((example, exampleIndex) => {
+      const translated = exampleTranslations[exampleIndex];
+      return `<div><span>例</span>${esc(example)}${translated ? `<small class="example-translation">${esc(translated)}</small>` : ""}</div>`;
+    });
+    return `<div class="sense"><span class="sense-number">${index + 1}</span><div class="sense-copy">${translations.length ? `<div class="sense-translation">${translations.map(esc).join("；")}</div>` : ""}<div class="definition">${esc(sense.definition || "暂无英文释义")}</div>${exampleRows.length ? `<div class="example">${exampleRows.join("")}</div>` : ""}${renderRelated("近义", sense.synonyms)}${renderRelated("反义", sense.antonyms)}<div class="sense-footer">${copyButton("sense", "复制本条释义")}</div></div></div>`;
   }
 
   function renderWordForms(forms) {
@@ -323,6 +342,12 @@
     return `<div class="whole-word-translation${dictionaryMode ? " cloud-after-dictionary" : ""}"><div class="whole-word-heading"><strong>${dictionaryMode ? "整词翻译" : "翻译结果"}</strong><span>${dictionaryMode ? esc(supplement) : ""}</span></div>${rows.map(renderCloudResult).join("")}</div>`;
   }
 
+  function renderOrderedResults(results) {
+    return values(results).map(item => item.displayType === "cloud"
+      ? renderCloudReference([item], true)
+      : renderDictionaryEntry(item)).join("");
+  }
+
   function renderSuggestions(suggestions) {
     const words = values(suggestions).map(item => clean(item.word || item)).filter(Boolean);
     if (!words.length) return "";
@@ -341,7 +366,7 @@
     if (result.strategy === "local" && result.localResults?.length) {
       content = result.localResults.map(renderDictionaryEntry).join("");
     } else if (result.dictionaryResults?.length) {
-      content = `${result.dictionaryResults.map(renderDictionaryEntry).join("")}${renderCloudReference(result.cloudResults, true)}${renderSuggestions(result.suggestions)}`;
+      content = `${result.displayResults?.length ? renderOrderedResults(result.displayResults) : `${result.dictionaryResults.map(renderDictionaryEntry).join("")}${renderCloudReference(result.cloudResults, true)}`}${renderSuggestions(result.suggestions)}`;
     } else if (result.cloudResults?.length) {
       content = `<div class="result-body">${renderCloudReference(result.cloudResults)}${renderSuggestions(result.suggestions)}</div>`;
     } else {
@@ -550,6 +575,7 @@
     const translation = settings.translation || {};
     const dictionary = settings.dictionary || {};
     setChecked("selection-enabled", settings.behavior?.selectionLookup);
+    setChecked("youdao-dictionary-enabled", dictionary.youdaoDictionary?.enabled !== false);
     setChecked("free-dictionary-enabled", dictionary.freeDictionary?.enabled !== false);
     setChecked("google-enabled", translation.google?.enabled);
     setField("google-mode", translation.google?.mode || (translation.google?.apiKey ? "cloud" : "web"));
@@ -574,6 +600,7 @@
   function readSettings() {
     const settings = JSON.parse(JSON.stringify(state.settings || {}));
     settings.dictionary ||= {};
+    settings.dictionary.youdaoDictionary ||= {};
     settings.dictionary.freeDictionary ||= {};
     settings.translation ||= {};
     settings.translation.google ||= {};
@@ -594,6 +621,7 @@
     settings.translation.baidu.enabled = $("#baidu-enabled").checked;
     settings.translation.baidu.apiKey = clean($("#baidu-api-key").value);
     settings.translation.baidu.secretKey = clean($("#baidu-secret-key").value);
+    settings.dictionary.youdaoDictionary.enabled = $("#youdao-dictionary-enabled").checked;
     settings.dictionary.freeDictionary.enabled = $("#free-dictionary-enabled").checked;
     settings.dictionary.serviceOrder = [...document.querySelectorAll("#dictionary-service-order .service-order-row")]
       .map(row => row.dataset.serviceId)

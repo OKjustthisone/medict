@@ -15,6 +15,9 @@ internal static class SelectionHelper
     private const uint InputKeyboard = 1;
     private const ushort VkControl = 0x11;
     private const ushort VkMenu = 0x12;
+    private const ushort VkShift = 0x10;
+    private const ushort VkLwin = 0x5B;
+    private const ushort VkRwin = 0x5C;
     private const ushort VkC = 0x43;
     private const uint KeyeventfKeyup = 0x0002;
     private const uint GaRoot = 2;
@@ -101,8 +104,16 @@ internal static class SelectionHelper
         IntPtr foreground = GetAncestor(GetForegroundWindow(), GaRoot);
         if (foreground == IntPtr.Zero || (_medictWindow != IntPtr.Zero && foreground == _medictWindow)) return false;
 
-        string selected = TryReadUiAutomationSelection();
-        if (String.IsNullOrWhiteSpace(selected)) selected = TryCopySelection();
+        string selected = "";
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            if (attempt == 1) Thread.Sleep(90);
+            if (attempt == 2) Thread.Sleep(180);
+
+            selected = TryReadUiAutomationSelection(foreground);
+            if (String.IsNullOrWhiteSpace(selected)) selected = TryCopySelection();
+            if (!String.IsNullOrWhiteSpace(selected)) break;
+        }
         selected = NormalizeSelection(selected);
         if (String.IsNullOrWhiteSpace(selected)) return false;
 
@@ -121,7 +132,9 @@ internal static class SelectionHelper
         {
             bool controlDown = (GetAsyncKeyState(VkControl) & 0x8000) != 0;
             bool altDown = (GetAsyncKeyState(VkMenu) & 0x8000) != 0;
-            if (!controlDown && !altDown)
+            bool shiftDown = (GetAsyncKeyState(VkShift) & 0x8000) != 0;
+            bool windowsDown = (GetAsyncKeyState(VkLwin) & 0x8000) != 0 || (GetAsyncKeyState(VkRwin) & 0x8000) != 0;
+            if (!controlDown && !altDown && !shiftDown && !windowsDown)
             {
                 Thread.Sleep(45);
                 return;
@@ -130,12 +143,38 @@ internal static class SelectionHelper
         }
     }
 
-    private static string TryReadUiAutomationSelection()
+    private static string TryReadUiAutomationSelection(IntPtr foreground)
     {
+        string selected = "";
         try
         {
-            AutomationElement focused = AutomationElement.FocusedElement;
-            if (focused == null) return "";
+            selected = ReadUiAutomationSelection(AutomationElement.FocusedElement);
+        }
+        catch
+        {
+        }
+        if (!String.IsNullOrWhiteSpace(selected)) return selected;
+
+        try
+        {
+            AutomationElement root = AutomationElement.FromHandle(foreground);
+            if (root == null) return "";
+            AutomationElement focused = root.FindFirst(
+                TreeScope.Descendants,
+                new PropertyCondition(AutomationElement.HasKeyboardFocusProperty, true));
+            return ReadUiAutomationSelection(focused);
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
+    private static string ReadUiAutomationSelection(AutomationElement focused)
+    {
+        if (focused == null) return "";
+        try
+        {
             object passwordValue = focused.GetCurrentPropertyValue(AutomationElement.IsPasswordProperty, true);
             if (passwordValue is bool && (bool)passwordValue) return "";
 
@@ -160,21 +199,37 @@ internal static class SelectionHelper
     private static string TryCopySelection()
     {
         uint sequenceBefore = GetClipboardSequenceNumber();
+        string clipboardTextBefore = "";
+        try
+        {
+            if (Clipboard.ContainsText(TextDataFormat.UnicodeText))
+            {
+                clipboardTextBefore = Clipboard.GetText(TextDataFormat.UnicodeText);
+            }
+        }
+        catch
+        {
+        }
         DataObject snapshot = CloneClipboard();
         SendCopyShortcut();
 
         string selected = "";
-        for (int attempt = 0; attempt < 6; attempt++)
+        for (int attempt = 0; attempt < 16; attempt++)
         {
-            Thread.Sleep(35);
+            Thread.Sleep(40);
             Application.DoEvents();
-            if (GetClipboardSequenceNumber() == sequenceBefore) continue;
             try
             {
                 if (Clipboard.ContainsText(TextDataFormat.UnicodeText))
                 {
-                    selected = Clipboard.GetText(TextDataFormat.UnicodeText);
-                    break;
+                    string candidate = Clipboard.GetText(TextDataFormat.UnicodeText);
+                    bool clipboardChanged = GetClipboardSequenceNumber() != sequenceBefore;
+                    bool textChanged = !String.Equals(candidate, clipboardTextBefore, StringComparison.Ordinal);
+                    if (!String.IsNullOrWhiteSpace(candidate) && (clipboardChanged || textChanged))
+                    {
+                        selected = candidate;
+                        break;
+                    }
                 }
             }
             catch

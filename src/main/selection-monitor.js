@@ -16,7 +16,7 @@ function parseSelectionLine(line) {
   }
 }
 
-function captureSelectionOnce(executablePath, { windowHandle = 0, timeout = 3000 } = {}) {
+function captureSelectionAttempt(executablePath, { windowHandle = 0, timeout = 3000 } = {}) {
   if (process.platform !== "win32") return Promise.resolve("");
   if (!executablePath || !fs.existsSync(executablePath)) {
     return Promise.reject(new Error("划词助手未编译"));
@@ -59,12 +59,35 @@ function captureSelectionOnce(executablePath, { windowHandle = 0, timeout = 3000
   });
 }
 
+function captureSelectionOnce(executablePath, { windowHandle = 0, timeout = 3000 } = {}) {
+  if (process.platform !== "win32") return Promise.resolve("");
+  if (!executablePath || !fs.existsSync(executablePath)) {
+    return Promise.reject(new Error("划词助手未编译"));
+  }
+
+  const totalTimeout = Math.max(1000, Number(timeout) || 3000);
+  const attemptTimeout = Math.max(700, Math.floor(totalTimeout * 0.62));
+  return captureSelectionAttempt(executablePath, { windowHandle, timeout: attemptTimeout })
+    .then(async text => {
+      if (text) return text;
+      await new Promise(resolve => setTimeout(resolve, 90));
+      return captureSelectionAttempt(executablePath, {
+        windowHandle,
+        timeout: Math.max(700, totalTimeout - attemptTimeout - 90)
+      });
+    });
+}
+
 class SelectionMonitor extends EventEmitter {
   constructor(executablePath) {
     super();
     this.executablePath = executablePath;
     this.process = null;
     this.buffer = "";
+    this.startOptions = null;
+    this.restartTimer = null;
+    this.restartAttempts = 0;
+    this.stopRequested = false;
   }
 
   start({ parentPid, windowHandle }) {
@@ -74,6 +97,15 @@ class SelectionMonitor extends EventEmitter {
       return false;
     }
 
+    this.startOptions = { parentPid, windowHandle };
+    this.restartAttempts = 0;
+    this.stopRequested = false;
+    return this.spawnMonitor();
+  }
+
+  spawnMonitor() {
+    if (this.process || this.stopRequested || !this.startOptions) return false;
+    const { parentPid, windowHandle } = this.startOptions;
     const child = spawn(this.executablePath, [String(parentPid || process.pid), String(windowHandle || 0)], {
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"]
@@ -96,6 +128,14 @@ class SelectionMonitor extends EventEmitter {
         active: false,
         message: code === 0 || code == null ? "划词助手已停止" : `划词助手异常退出（${code}）`
       });
+      if (!this.stopRequested && this.startOptions && this.restartAttempts < 3) {
+        this.restartAttempts += 1;
+        clearTimeout(this.restartTimer);
+        this.restartTimer = setTimeout(() => {
+          this.restartTimer = null;
+          this.spawnMonitor();
+        }, 700);
+      }
     });
     return true;
   }
@@ -118,6 +158,10 @@ class SelectionMonitor extends EventEmitter {
   }
 
   stop() {
+    this.stopRequested = true;
+    clearTimeout(this.restartTimer);
+    this.restartTimer = null;
+    this.startOptions = null;
     const child = this.process;
     this.process = null;
     if (child && !child.killed) child.kill();

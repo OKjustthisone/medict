@@ -323,6 +323,7 @@ button:disabled { cursor: wait; opacity: .62; }
 .example { margin-top: 6px; padding-left: 8px; border-left: 2px solid #e5e6e4; color: #777d85; font-family: Georgia, "Microsoft YaHei UI", serif; font-size: 10px; line-height: 1.55; user-select: text; }
 .example div + div { margin-top: 3px; }
 .example span { margin-right: 5px; color: #9a7b55; font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif; font-size: 9px; font-weight: 700; }
+.example-translation { display: block; margin: 2px 0 0 20px; color: #9a9da3; font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif; font-size: 9px; }
 .sense-related { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; color: #979ba1; font-size: 9px; }
 .sense-related > span { margin-right: 2px; font-weight: 700; }
 .sense-related em { padding: 2px 5px; border-radius: 4px; color: #667491; background: #f2f4f8; font-style: normal; }

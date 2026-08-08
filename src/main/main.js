@@ -221,7 +221,7 @@ async function runShortcutLookup() {
   try {
     const selected = await captureSelectionOnce(selectionHelperPath(), {
       windowHandle: nativeWindowHandle(mainWindow),
-      timeout: 3200
+      timeout: 5200
     });
     if (selected) {
       await runSelectionLookup(selected, { force: true, focus: true });
