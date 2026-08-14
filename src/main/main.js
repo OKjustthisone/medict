@@ -66,12 +66,32 @@ function sendToRenderer(channel, value) {
   mainWindow.webContents.send(channel, value);
 }
 
-function showMainWindow({ focus = true } = {}) {
+function requestQueryInputFocus() {
+  const window = mainWindow;
+  if (!window || window.isDestroyed()) return;
+  const focus = () => {
+    if (!mainWindow || mainWindow !== window || window.isDestroyed()) return;
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
+    window.webContents.focus();
+    sendToRenderer("window:focus-input");
+  };
+  // The first IPC message can be sent before renderer.js has finished binding
+  // its listener, especially during the first launch. Repeat briefly after
+  // the native window activation so tray and global-shortcut launches behave
+  // consistently without keeping a background timer alive.
+  focus();
+  [40, 140, 320].forEach(delay => setTimeout(focus, delay));
+}
+
+function showMainWindow({ focus = true, focusInput = focus } = {}) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   if (focus) {
     restoreConfiguredWindowTop();
     mainWindow.show();
     mainWindow.focus();
+    if (focusInput) requestQueryInputFocus();
   } else {
     mainWindow.showInactive();
   }
@@ -104,6 +124,7 @@ function showNearCursor({ focus = false } = {}) {
   if (focus) {
     mainWindow.show();
     mainWindow.focus();
+    requestQueryInputFocus();
   } else {
     mainWindow.showInactive();
   }
@@ -136,19 +157,35 @@ function stopSelectionMonitor() {
 function startSelectionMonitor() {
   if (process.platform !== "win32" || !mainWindow || mainWindow.isDestroyed()) return;
   if (selectionMonitor?.process) return;
+  const settings = settingsStore.get();
+  const mouseSelectionEnabled = Boolean(settings.behavior?.selectionLookup);
+  const shortcut = shortcutsSuspended ? "" : String(settings.shortcuts?.selectionLookup || "");
   selectionMonitor = new SelectionMonitor(selectionHelperPath());
   selectionMonitor.on("status", publishSelectionStatus);
   selectionMonitor.on("text", text => runSelectionLookup(text));
+  selectionMonitor.on("shortcut-text", text => runSelectionLookup(text, { force: true, focus: true }));
+  selectionMonitor.on("empty", () => {
+    // UI Automation is not equally complete for every Chrome renderer. Give
+    // the one-shot helper a second chance to copy the selection before
+    // telling the user that the page returned nothing.
+    void runShortcutLookup();
+  });
   const started = selectionMonitor.start({
     parentPid: process.pid,
-    windowHandle: nativeWindowHandle(mainWindow)
+    windowHandle: nativeWindowHandle(mainWindow),
+    shortcut,
+    mouseSelectionEnabled
   });
   if (!started) publishSelectionStatus({ active: false });
 }
 
 function syncSelectionMonitor() {
-  if (settingsStore.get().behavior?.selectionLookup) startSelectionMonitor();
-  else stopSelectionMonitor();
+  if (process.platform !== "win32" || !mainWindow || mainWindow.isDestroyed()) return;
+  if (selectionMonitor) {
+    selectionMonitor.stop();
+    selectionMonitor = null;
+  }
+  startSelectionMonitor();
 }
 
 function wordLookupCacheKey(query, settings, requestOptions = {}) {
@@ -292,7 +329,7 @@ async function runShortcutLookup() {
       return;
     }
     showMainWindow();
-    sendToRenderer("selection:empty", { message: "未读取到选中文本，请重新选择后按 Ctrl + Alt + D" });
+    sendToRenderer("selection:empty", { message: selectionEmptyMessage() });
   } catch (error) {
     showMainWindow();
     sendToRenderer("selection:empty", { message: `快捷键取词失败：${error.message || error}` });
@@ -301,10 +338,34 @@ async function runShortcutLookup() {
   }
 }
 
+function shortcutLabel(accelerator) {
+  return String(accelerator || "")
+    .replace(/CommandOrControl/gi, "Ctrl")
+    .split("+")
+    .map(part => part.trim())
+    .filter(Boolean)
+    .join(" + ");
+}
+
+function selectionEmptyMessage() {
+  const accelerator = settingsStore?.get().shortcuts?.selectionLookup || "";
+  const label = shortcutLabel(accelerator);
+  return label
+    ? `未读取到选中文本，请重新选择后按 ${label}`
+    : "未读取到选中文本，请重新选择后使用“选词后查词”快捷键";
+}
+
 function applyConfiguredShortcuts(settings) {
   return registerShortcutConfiguration(globalShortcut, settings?.shortcuts, {
     showWindow: () => showMainWindow(),
-    selectionLookup: () => { void runShortcutLookup(); }
+    // The resident SelectionHelper captures the configured shortcut before a
+    // browser can consume Alt+D (or otherwise move focus away from the
+    // selection). Keep the Electron handler as a fallback for installations
+    // where that helper cannot be started.
+    selectionLookup: () => {
+      if (selectionMonitor?.hasKeyboardShortcut()) return;
+      void runShortcutLookup();
+    }
   });
 }
 
@@ -320,7 +381,7 @@ function registerIpc() {
   ipcMain.handle("settings:get", () => settingsStore.get());
   ipcMain.handle("settings:save", async (_, value) => {
     const previous = settingsStore.get();
-    const next = mergeSettings(value);
+    const next = mergeSettings(value, { migrateLegacyShortcut: false });
     next.shortcuts = validateShortcutConfiguration(next.shortcuts);
     const keepSuspended = shortcutsSuspended;
     let saved;
@@ -371,11 +432,14 @@ function registerIpc() {
   ipcMain.handle("shortcuts:suspend", () => {
     shortcutsSuspended = true;
     globalShortcut.unregisterAll();
+    syncSelectionMonitor();
     return true;
   });
   ipcMain.handle("shortcuts:resume", () => {
     shortcutsSuspended = false;
-    return applyConfiguredShortcuts(settingsStore.get());
+    const result = applyConfiguredShortcuts(settingsStore.get());
+    syncSelectionMonitor();
+    return result;
   });
   ipcMain.handle("drug-cache:stats", () => drugCache?.stats() || { count: 0, ttlMs: 7 * 24 * 60 * 60 * 1000 });
   ipcMain.handle("clipboard:write-text", (_, value) => {
@@ -441,6 +505,9 @@ function createWindow() {
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
     return { action: "deny" };
+  });
+  mainWindow.webContents.on("did-finish-load", () => {
+    requestQueryInputFocus();
   });
   mainWindow.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
   mainWindow.once("ready-to-show", () => {

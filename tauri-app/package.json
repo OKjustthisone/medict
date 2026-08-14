@@ -1,0 +1,16 @@
+{
+  "name": "medict-tauri",
+  "version": "0.1.0",
+  "description": "Independent Tauri 2 migration workspace for Medict.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check:frontend": "node --check frontend/tauri-bridge.js && node --check frontend/renderer.js",
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}

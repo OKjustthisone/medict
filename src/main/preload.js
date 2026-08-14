@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld("medict", {
   onSelectionPending: callback => subscribe("selection:pending", callback),
   onSelectionResult: callback => subscribe("selection:result", callback),
   onWordPartial: callback => subscribe("lookup:word-partial", callback),
+  onWindowFocusInput: callback => subscribe("window:focus-input", callback),
   onSelectionEmpty: callback => subscribe("selection:empty", callback),
   onSelectionStatus: callback => subscribe("selection:status", callback),
   minimizeWindow: () => ipcRenderer.invoke("window:minimize"),

@@ -696,13 +696,19 @@ test("defaults to automatic selection and Google web fallback without storing a 
   assert.equal(settings.dictionary.freeDictionary.enabled, true);
   assert.deepEqual(settings.dictionary.serviceOrder, ["youdaoDictionary", "freeDictionary", "baidu", "google"]);
   assert.equal(settings.shortcuts.showWindow, "CommandOrControl+Alt+M");
-  assert.equal(settings.shortcuts.selectionLookup, "CommandOrControl+Alt+D");
+  assert.equal(settings.shortcuts.selectionLookup, "Alt+D");
   assert.equal(settings.translation.google.enabled, true);
   assert.equal(settings.translation.google.mode, "web");
   assert.equal(settings.translation.google.apiKey, "");
   assert.equal(settings.translation.baidu.enabled, false);
   assert.equal(settings.translation.baidu.apiKey, "");
   assert.equal(settings.translation.youdao, undefined);
+});
+
+test("migrates the previous default selection shortcut to Alt+D", () => {
+  assert.equal(mergeSettings({ shortcuts: { selectionLookup: "CommandOrControl+Alt+D" } }).shortcuts.selectionLookup, "Alt+D");
+  assert.equal(mergeSettings({ shortcuts: { selectionLookup: "Ctrl + Alt + D" } }).shortcuts.selectionLookup, "Alt+D");
+  assert.equal(mergeSettings({ shortcuts: { selectionLookup: "Alt+Shift+D" } }).shortcuts.selectionLookup, "Alt+Shift+D");
 });
 
 test("preserves a configured result font scale", () => {
@@ -718,6 +724,23 @@ test("normalizes configurable global shortcuts and rejects conflicts", () => {
   });
   assert.throws(() => validateShortcutConfiguration({ showWindow: "Ctrl+Alt+D", selectionLookup: "CommandOrControl+Alt+D" }), /不能使用同一个快捷键/);
   assert.throws(() => normalizeAccelerator("M"), /必须包含 Ctrl 或 Alt/);
+});
+
+test("parses shortcut-captured selection events separately from mouse selection", () => {
+  const encoded = Buffer.from("github selection", "utf8").toString("base64");
+  assert.deepEqual(parseSelectionLine(`TEXT\t${encoded}`), { type: "text", text: "github selection" });
+  assert.deepEqual(parseSelectionLine(`SHORTCUT_TEXT\t${encoded}`), { type: "shortcut-text", text: "github selection" });
+  assert.deepEqual(parseSelectionLine("KEYBOARD_READY"), { type: "keyboard-ready" });
+  assert.deepEqual(parseSelectionLine("EMPTY"), { type: "empty" });
+});
+
+test("keeps a fallback capture path for Chrome pages that expose no focused text pattern", async () => {
+  const mainSource = await fs.readFile(path.join(__dirname, "..", "src", "main", "main.js"), "utf8");
+  const helperSource = await fs.readFile(path.join(__dirname, "..", "src", "native", "SelectionHelper.cs"), "utf8");
+  assert.match(mainSource, /selectionMonitor\.on\("empty",[\s\S]*runShortcutLookup\(\)/);
+  assert.match(helperSource, /IsTextPatternAvailableProperty/);
+  assert.match(helperSource, /UpdateTrackedModifierState/);
+  assert.match(helperSource, /Clipboard\.SetText\(probe/);
 });
 
 test("registers the panel and selection shortcuts together", () => {

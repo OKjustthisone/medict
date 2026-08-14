@@ -11,23 +11,51 @@ using System.Windows.Forms;
 internal static class SelectionHelper
 {
     private const int WhMouseLl = 14;
+    private const int WhKeyboardLl = 13;
     private const int WmLButtonUp = 0x0202;
+    private const int WmKeyDown = 0x0100;
+    private const int WmKeyUp = 0x0101;
+    private const int WmSysKeyDown = 0x0104;
+    private const int WmSysKeyUp = 0x0105;
     private const uint InputKeyboard = 1;
     private const ushort VkControl = 0x11;
+    private const ushort VkLControl = 0xA2;
+    private const ushort VkRControl = 0xA3;
     private const ushort VkMenu = 0x12;
+    private const ushort VkLMenu = 0xA4;
+    private const ushort VkRMenu = 0xA5;
     private const ushort VkShift = 0x10;
+    private const ushort VkLShift = 0xA0;
+    private const ushort VkRShift = 0xA1;
     private const ushort VkLwin = 0x5B;
     private const ushort VkRwin = 0x5C;
+    private const uint LlkhfAltDown = 0x20;
     private const ushort VkC = 0x43;
     private const uint KeyeventfKeyup = 0x0002;
     private const uint GaRoot = 2;
 
     private static readonly LowLevelMouseProc MouseProc = HookCallback;
+    private static readonly LowLevelKeyboardProc KeyboardProc = KeyboardHookCallback;
     private static IntPtr _hook = IntPtr.Zero;
+    private static IntPtr _keyboardHook = IntPtr.Zero;
     private static IntPtr _medictWindow = IntPtr.Zero;
     private static int _parentPid;
     private static System.Windows.Forms.Timer _captureTimer;
+    private static System.Windows.Forms.Timer _shortcutTimer;
     private static System.Windows.Forms.Timer _parentTimer;
+    private static bool _mouseSelectionEnabled = true;
+    private static bool _shortcutPending;
+    private static bool _shortcutKeySuppressed;
+    private static int _shortcutVirtualKey;
+    private static bool _shortcutCtrl;
+    private static bool _shortcutAlt;
+    private static bool _shortcutShift;
+    private static bool _trackedControlDown;
+    private static bool _trackedAltDown;
+    private static bool _trackedShiftDown;
+    private static bool _trackedWindowsDown;
+    private static IntPtr _shortcutForeground = IntPtr.Zero;
+    private static string _shortcutSelectionSnapshot = "";
     private static string _lastText = "";
     private static DateTime _lastTextAt = DateTime.MinValue;
 
@@ -41,6 +69,11 @@ internal static class SelectionHelper
         {
             long handle;
             if (long.TryParse(args[windowArgument], out handle)) _medictWindow = new IntPtr(handle);
+        }
+        if (!captureOnce)
+        {
+            _shortcutVirtualKey = ParseShortcut(args.Length > 2 ? args[2] : "", out _shortcutCtrl, out _shortcutAlt, out _shortcutShift);
+            _mouseSelectionEnabled = args.Length <= 3 || String.Equals(args[3], "1", StringComparison.Ordinal);
         }
 
         Application.EnableVisualStyles();
@@ -61,6 +94,17 @@ internal static class SelectionHelper
             CaptureAndPublish();
         };
 
+        _shortcutTimer = new System.Windows.Forms.Timer();
+        // Run almost immediately after the low-level hook returns. This gives
+        // the page a chance to finish the selection while keeping Alt+D from
+        // moving focus to Chrome's address bar before we read/copy it.
+        _shortcutTimer.Interval = 5;
+        _shortcutTimer.Tick += delegate
+        {
+            _shortcutTimer.Stop();
+            CapturePendingShortcut();
+        };
+
         _parentTimer = new System.Windows.Forms.Timer();
         _parentTimer.Interval = 2000;
         _parentTimer.Tick += delegate
@@ -77,21 +121,30 @@ internal static class SelectionHelper
         };
         _parentTimer.Start();
 
-        _hook = SetWindowsHookEx(WhMouseLl, MouseProc, GetModuleHandle(null), 0);
-        if (_hook == IntPtr.Zero)
+        if (_mouseSelectionEnabled)
         {
-            Publish("ERROR\t无法安装 Windows 鼠标监听器");
+            _hook = SetWindowsHookEx(WhMouseLl, MouseProc, GetModuleHandle(null), 0);
+        }
+        if (_shortcutVirtualKey != 0)
+        {
+            _keyboardHook = SetWindowsHookEx(WhKeyboardLl, KeyboardProc, GetModuleHandle(null), 0);
+        }
+        if (_hook == IntPtr.Zero && _keyboardHook == IntPtr.Zero)
+        {
+            Publish("ERROR\t无法安装 Windows 划词监听器（错误码 " + Marshal.GetLastWin32Error() + "）");
             return;
         }
 
+        if (_keyboardHook != IntPtr.Zero) Publish("KEYBOARD_READY");
         Publish("READY");
         Application.Run();
-        UnhookWindowsHookEx(_hook);
+        if (_hook != IntPtr.Zero) UnhookWindowsHookEx(_hook);
+        if (_keyboardHook != IntPtr.Zero) UnhookWindowsHookEx(_keyboardHook);
     }
 
     private static IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
-        if (nCode >= 0 && wParam.ToInt32() == WmLButtonUp)
+        if (_mouseSelectionEnabled && nCode >= 0 && wParam.ToInt32() == WmLButtonUp)
         {
             _captureTimer.Stop();
             _captureTimer.Start();
@@ -99,9 +152,206 @@ internal static class SelectionHelper
         return CallNextHookEx(_hook, nCode, wParam, lParam);
     }
 
+    private static IntPtr KeyboardHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+    {
+        if (nCode >= 0 && _shortcutVirtualKey != 0)
+        {
+            int message = wParam.ToInt32();
+            bool keyDown = message == WmKeyDown || message == WmSysKeyDown;
+            bool keyUp = message == WmKeyUp || message == WmSysKeyUp;
+            if (keyDown || keyUp)
+            {
+                KeyboardHookData data = (KeyboardHookData)Marshal.PtrToStructure(lParam, typeof(KeyboardHookData));
+                int virtualKey = (int)data.virtualKey;
+                UpdateTrackedModifierState(virtualKey, keyDown);
+                bool altFromMessage = (data.flags & LlkhfAltDown) != 0
+                    || message == WmSysKeyDown
+                    || message == WmSysKeyUp;
+                if (keyDown && virtualKey == _shortcutVirtualKey && ShortcutModifiersMatch(altFromMessage))
+                {
+                    _shortcutPending = true;
+                    _shortcutKeySuppressed = true;
+                    _shortcutForeground = GetAncestor(GetForegroundWindow(), GaRoot);
+                    _shortcutSelectionSnapshot = "";
+                    _shortcutTimer.Stop();
+                    _shortcutTimer.Start();
+                    // Prevent browsers from consuming Alt+D as "focus address bar".
+                    return (IntPtr)1;
+                }
+                if (keyUp && _shortcutKeySuppressed && virtualKey == _shortcutVirtualKey)
+                {
+                    _shortcutKeySuppressed = false;
+                    return (IntPtr)1;
+                }
+            }
+        }
+        return CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
+    }
+
+    private static void CapturePendingShortcut()
+    {
+        if (!_shortcutPending) return;
+
+        IntPtr foreground = _shortcutForeground != IntPtr.Zero
+            ? _shortcutForeground
+            : GetAncestor(GetForegroundWindow(), GaRoot);
+        if (foreground == IntPtr.Zero || (_medictWindow != IntPtr.Zero && foreground == _medictWindow))
+        {
+            ResetShortcutCapture();
+            Publish("EMPTY");
+            return;
+        }
+
+        // UI Automation can read Chrome's selection while the shortcut keys
+        // are still down. Try this first so Alt+D never reaches the browser.
+        string selected = String.IsNullOrWhiteSpace(_shortcutSelectionSnapshot)
+            ? TryReadUiAutomationSelection(foreground)
+            : _shortcutSelectionSnapshot;
+        if (!String.IsNullOrWhiteSpace(selected))
+        {
+            ResetShortcutCapture();
+            if (!PublishSelection(selected, "SHORTCUT_TEXT")) Publish("EMPTY");
+            return;
+        }
+
+        if (AnyShortcutKeyDown())
+        {
+            _shortcutTimer.Start();
+            return;
+        }
+
+        ResetShortcutCapture();
+        if (!CaptureAndPublish(foreground)) Publish("EMPTY");
+    }
+
+    private static bool AnyShortcutKeyDown()
+    {
+        return (GetAsyncKeyState(VkControl) & 0x8000) != 0
+            || (GetAsyncKeyState(VkMenu) & 0x8000) != 0
+            || (GetAsyncKeyState(VkShift) & 0x8000) != 0
+            || (GetAsyncKeyState(VkLwin) & 0x8000) != 0
+            || (GetAsyncKeyState(VkRwin) & 0x8000) != 0;
+    }
+
+    private static void UpdateTrackedModifierState(int virtualKey, bool keyDown)
+    {
+        if (virtualKey == VkControl || virtualKey == VkLControl || virtualKey == VkRControl)
+        {
+            _trackedControlDown = keyDown;
+        }
+        else if (virtualKey == VkMenu || virtualKey == VkLMenu || virtualKey == VkRMenu)
+        {
+            _trackedAltDown = keyDown;
+        }
+        else if (virtualKey == VkShift || virtualKey == VkLShift || virtualKey == VkRShift)
+        {
+            _trackedShiftDown = keyDown;
+        }
+        else if (virtualKey == VkLwin || virtualKey == VkRwin)
+        {
+            _trackedWindowsDown = keyDown;
+        }
+    }
+
+    private static bool ShortcutModifiersMatch(bool altFromMessage)
+    {
+        bool controlDown = _trackedControlDown || (GetAsyncKeyState(VkControl) & 0x8000) != 0;
+        bool altDown = _trackedAltDown || altFromMessage || (GetAsyncKeyState(VkMenu) & 0x8000) != 0;
+        bool shiftDown = _trackedShiftDown || (GetAsyncKeyState(VkShift) & 0x8000) != 0;
+        bool windowsDown = _trackedWindowsDown
+            || (GetAsyncKeyState(VkLwin) & 0x8000) != 0
+            || (GetAsyncKeyState(VkRwin) & 0x8000) != 0;
+        return controlDown == _shortcutCtrl
+            && altDown == _shortcutAlt
+            && shiftDown == _shortcutShift
+            && !windowsDown;
+    }
+
+    private static void ResetShortcutCapture()
+    {
+        _shortcutPending = false;
+        _shortcutKeySuppressed = false;
+        _shortcutForeground = IntPtr.Zero;
+        _shortcutSelectionSnapshot = "";
+    }
+
+    private static int ParseShortcut(string value, out bool control, out bool alt, out bool shift)
+    {
+        control = false;
+        alt = false;
+        shift = false;
+        int key = 0;
+        string[] parts = String.IsNullOrWhiteSpace(value) ? new string[0] : value.Split('+');
+        foreach (string rawPart in parts)
+        {
+            string part = (rawPart ?? "").Trim();
+            string token = part.ToLowerInvariant().Replace(" ", "");
+            if (token == "ctrl" || token == "control" || token == "cmdorctrl" || token == "commandorcontrol")
+            {
+                control = true;
+                continue;
+            }
+            if (token == "alt" || token == "option")
+            {
+                alt = true;
+                continue;
+            }
+            if (token == "shift")
+            {
+                shift = true;
+                continue;
+            }
+            int parsed = ParseVirtualKey(part);
+            if (parsed == 0 || key != 0) return 0;
+            key = parsed;
+        }
+        return key != 0 && (control || alt) ? key : 0;
+    }
+
+    private static int ParseVirtualKey(string value)
+    {
+        string token = (value ?? "").Trim();
+        if (token.Length == 1)
+        {
+            char character = Char.ToUpperInvariant(token[0]);
+            if ((character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9')) return character;
+        }
+        if (token.Length > 1 && (token[0] == 'F' || token[0] == 'f'))
+        {
+            int functionNumber;
+            if (Int32.TryParse(token.Substring(1), out functionNumber) && functionNumber >= 1 && functionNumber <= 24)
+            {
+                return 0x70 + functionNumber - 1;
+            }
+        }
+        switch (token.ToLowerInvariant())
+        {
+            case "space": return 0x20;
+            case "tab": return 0x09;
+            case "enter":
+            case "return": return 0x0D;
+            case "home": return 0x24;
+            case "end": return 0x23;
+            case "pageup": return 0x21;
+            case "pagedown": return 0x22;
+            case "up": return 0x26;
+            case "down": return 0x28;
+            case "left": return 0x25;
+            case "right": return 0x27;
+            default: return 0;
+        }
+    }
+
     private static bool CaptureAndPublish()
     {
-        IntPtr foreground = GetAncestor(GetForegroundWindow(), GaRoot);
+        return CaptureAndPublish(IntPtr.Zero);
+    }
+
+    private static bool CaptureAndPublish(IntPtr preferredForeground)
+    {
+        IntPtr foreground = preferredForeground != IntPtr.Zero
+            ? GetAncestor(preferredForeground, GaRoot)
+            : GetAncestor(GetForegroundWindow(), GaRoot);
         if (foreground == IntPtr.Zero || (_medictWindow != IntPtr.Zero && foreground == _medictWindow)) return false;
 
         string selected = "";
@@ -117,12 +367,19 @@ internal static class SelectionHelper
         selected = NormalizeSelection(selected);
         if (String.IsNullOrWhiteSpace(selected)) return false;
 
+        return PublishSelection(selected, "TEXT");
+    }
+
+    private static bool PublishSelection(string selected, string messageType)
+    {
+        selected = NormalizeSelection(selected);
+        if (String.IsNullOrWhiteSpace(selected)) return false;
         DateTime now = DateTime.UtcNow;
-        if (selected == _lastText && (now - _lastTextAt).TotalMilliseconds < 900) return false;
+        if (selected == _lastText && (now - _lastTextAt).TotalMilliseconds < 900) return true;
         _lastText = selected;
         _lastTextAt = now;
         string payload = Convert.ToBase64String(Encoding.UTF8.GetBytes(selected));
-        Publish("TEXT\t" + payload);
+        Publish(messageType + "\t" + payload);
         return true;
     }
 
@@ -162,7 +419,23 @@ internal static class SelectionHelper
             AutomationElement focused = root.FindFirst(
                 TreeScope.Descendants,
                 new PropertyCondition(AutomationElement.HasKeyboardFocusProperty, true));
-            return ReadUiAutomationSelection(focused);
+            selected = ReadUiAutomationSelection(focused);
+            if (!String.IsNullOrWhiteSpace(selected)) return selected;
+
+            // Chrome pages do not expose the selected DOM text consistently
+            // through the focused element. Search the renderer's text-pattern
+            // elements as a bounded fallback; this covers GitHub code blocks,
+            // reader views, and extension-backed Markdown pages.
+            AutomationElementCollection candidates = root.FindAll(
+                TreeScope.Descendants,
+                new PropertyCondition(AutomationElement.IsTextPatternAvailableProperty, true));
+            int count = Math.Min(candidates.Count, 128);
+            for (int index = 0; index < count; index++)
+            {
+                selected = ReadUiAutomationSelection(candidates[index]);
+                if (!String.IsNullOrWhiteSpace(selected)) return selected;
+            }
+            return "";
         }
         catch
         {
@@ -198,19 +471,18 @@ internal static class SelectionHelper
 
     private static string TryCopySelection()
     {
-        uint sequenceBefore = GetClipboardSequenceNumber();
-        string clipboardTextBefore = "";
+        DataObject snapshot = CloneClipboard();
+        string probe = "__MEDICT_SELECTION_PROBE__" + Guid.NewGuid().ToString("N");
+        bool probeWritten = false;
         try
         {
-            if (Clipboard.ContainsText(TextDataFormat.UnicodeText))
-            {
-                clipboardTextBefore = Clipboard.GetText(TextDataFormat.UnicodeText);
-            }
+            Clipboard.SetText(probe, TextDataFormat.UnicodeText);
+            probeWritten = true;
         }
         catch
         {
         }
-        DataObject snapshot = CloneClipboard();
+        uint sequenceBefore = GetClipboardSequenceNumber();
         SendCopyShortcut();
 
         string selected = "";
@@ -224,8 +496,9 @@ internal static class SelectionHelper
                 {
                     string candidate = Clipboard.GetText(TextDataFormat.UnicodeText);
                     bool clipboardChanged = GetClipboardSequenceNumber() != sequenceBefore;
-                    bool textChanged = !String.Equals(candidate, clipboardTextBefore, StringComparison.Ordinal);
-                    if (!String.IsNullOrWhiteSpace(candidate) && (clipboardChanged || textChanged))
+                    bool textChanged = !String.Equals(candidate, probe, StringComparison.Ordinal);
+                    bool copyProducedText = clipboardChanged || (probeWritten && textChanged);
+                    if (!String.IsNullOrWhiteSpace(candidate) && copyProducedText && (!probeWritten || textChanged))
                     {
                         selected = candidate;
                         break;
@@ -242,6 +515,16 @@ internal static class SelectionHelper
             try
             {
                 Clipboard.SetDataObject(snapshot, true, 5, 30);
+            }
+            catch
+            {
+            }
+        }
+        else if (probeWritten)
+        {
+            try
+            {
+                Clipboard.Clear();
             }
             catch
             {
@@ -319,6 +602,8 @@ internal static class SelectionHelper
 
     private delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
 
+    private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
+
     [StructLayout(LayoutKind.Sequential)]
     private struct Input
     {
@@ -342,8 +627,21 @@ internal static class SelectionHelper
         public IntPtr extraInfo;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct KeyboardHookData
+    {
+        public uint virtualKey;
+        public uint scanCode;
+        public uint flags;
+        public uint time;
+        public IntPtr extraInfo;
+    }
+
     [DllImport("user32.dll", SetLastError = true)]
     private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelMouseProc callback, IntPtr module, uint threadId);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc callback, IntPtr module, uint threadId);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

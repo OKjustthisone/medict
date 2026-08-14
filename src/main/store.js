@@ -44,7 +44,7 @@ const DEFAULT_SETTINGS = {
   },
   shortcuts: {
     showWindow: "CommandOrControl+Alt+M",
-    selectionLookup: "CommandOrControl+Alt+D"
+    selectionLookup: "Alt+D"
   },
   window: {
     alwaysOnTop: false,
@@ -71,8 +71,13 @@ function normalizeDictionaryServiceOrder(value) {
   ];
 }
 
-function mergeSettings(value) {
+function mergeSettings(value, { migrateLegacyShortcut = true } = {}) {
   const source = value && typeof value === "object" ? value : {};
+  const requestedShortcuts = source.shortcuts && typeof source.shortcuts === "object" ? source.shortcuts : {};
+  const legacySelectionShortcut = String(requestedShortcuts.selectionLookup || "").replace(/\s+/g, "").toLowerCase();
+  const selectionLookup = migrateLegacyShortcut && ["commandorcontrol+alt+d", "ctrl+alt+d"].includes(legacySelectionShortcut)
+    ? DEFAULT_SETTINGS.shortcuts.selectionLookup
+    : requestedShortcuts.selectionLookup;
   const translation = {
     ...clone(DEFAULT_SETTINGS.translation),
     ...(source.translation || {}),
@@ -121,7 +126,8 @@ function mergeSettings(value) {
     },
     shortcuts: {
       ...clone(DEFAULT_SETTINGS.shortcuts),
-      ...(source.shortcuts || {})
+      ...requestedShortcuts,
+      ...(selectionLookup ? { selectionLookup } : {})
     },
     window: {
       ...clone(DEFAULT_SETTINGS.window),
@@ -154,7 +160,7 @@ class SettingsStore {
   }
 
   async save(value) {
-    this.settings = mergeSettings(value);
+    this.settings = mergeSettings(value, { migrateLegacyShortcut: false });
     await fs.mkdir(path.dirname(this.filePath), { recursive: true });
     await fs.writeFile(this.filePath, `${JSON.stringify(this.settings, null, 2)}\n`, "utf8");
     return this.get();
