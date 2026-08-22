@@ -691,6 +691,7 @@ test("normalizes drug cache keys across whitespace and case", () => {
 test("defaults to automatic selection and Google web fallback without storing a key", () => {
   const settings = mergeSettings({});
   assert.equal(settings.behavior.selectionLookup, true);
+  assert.equal(settings.behavior.startOnBoot, false);
   assert.equal(settings.appearance.fontScale, 115);
   assert.equal(settings.dictionary.youdaoDictionary.enabled, true);
   assert.equal(settings.dictionary.freeDictionary.enabled, true);
@@ -703,6 +704,11 @@ test("defaults to automatic selection and Google web fallback without storing a 
   assert.equal(settings.translation.baidu.enabled, false);
   assert.equal(settings.translation.baidu.apiKey, "");
   assert.equal(settings.translation.youdao, undefined);
+});
+
+test("preserves the configurable Windows startup setting", () => {
+  assert.equal(mergeSettings({ behavior: { startOnBoot: true } }).behavior.startOnBoot, true);
+  assert.equal(mergeSettings({ behavior: { startOnBoot: false } }).behavior.startOnBoot, false);
 });
 
 test("migrates the previous default selection shortcut to Alt+D", () => {

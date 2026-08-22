@@ -61,6 +61,18 @@ function createAppIcon() {
   return nativeImage.createFromDataURL(`data:image/svg+xml;base64,${Buffer.from(ATOM_ICON_SVG).toString("base64")}`);
 }
 
+function applyStartupSetting(settings) {
+  if (process.platform !== "win32") return;
+  const loginItemSettings = {
+    openAtLogin: Boolean(settings?.behavior?.startOnBoot),
+    path: process.execPath
+  };
+  // In development, Electron itself is the executable. Pass the app path so
+  // Windows starts this project instead of opening a bare Electron process.
+  if (process.defaultApp) loginItemSettings.args = [`"${app.getAppPath()}"`];
+  app.setLoginItemSettings(loginItemSettings);
+}
+
 function sendToRenderer(channel, value) {
   if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
   mainWindow.webContents.send(channel, value);
@@ -387,6 +399,7 @@ function registerIpc() {
     let saved;
     try {
       applyConfiguredShortcuts(next);
+      applyStartupSetting(next);
       if (keepSuspended) globalShortcut.unregisterAll();
       saved = await settingsStore.save(next);
       wordLookupCache.clear();
@@ -398,6 +411,11 @@ function registerIpc() {
         } catch (restoreError) {
           console.warn("Medict shortcuts could not be restored:", restoreError.message);
         }
+      }
+      try {
+        applyStartupSetting(previous);
+      } catch (restoreError) {
+        console.warn("Medict startup setting could not be restored:", restoreError.message);
       }
       throw error;
     }
@@ -564,6 +582,11 @@ async function bootstrap() {
   const userData = app.getPath("userData");
   settingsStore = new SettingsStore(path.join(userData, "settings.json"));
   await settingsStore.load();
+  try {
+    applyStartupSetting(settingsStore.get());
+  } catch (error) {
+    console.warn("Medict startup setting could not be applied:", error.message);
+  }
   drugCache = new DrugCache(path.join(userData, "drug-cache.json"));
   await drugCache.load();
   registerIpc();

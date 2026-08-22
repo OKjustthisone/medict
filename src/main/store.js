@@ -37,7 +37,8 @@ const DEFAULT_SETTINGS = {
   },
   behavior: {
     selectionLookup: true,
-    selectionMaxLength: 500
+    selectionMaxLength: 500,
+    startOnBoot: false
   },
   appearance: {
     fontScale: 115
@@ -118,7 +119,8 @@ function mergeSettings(value, { migrateLegacyShortcut = true } = {}) {
     translation,
     behavior: {
       ...clone(DEFAULT_SETTINGS.behavior),
-      ...(source.behavior || {})
+      ...(source.behavior || {}),
+      startOnBoot: source.behavior?.startOnBoot === true
     },
     appearance: {
       ...clone(DEFAULT_SETTINGS.appearance),

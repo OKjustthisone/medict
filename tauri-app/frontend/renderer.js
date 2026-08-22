@@ -86,15 +86,11 @@
   function focusQueryInput() {
     const input = $("#query-input");
     if (!input) return;
-    const applyFocus = () => {
-      input.focus({ preventScroll: true });
-      const cursor = input.value.length;
-      try {
-        input.setSelectionRange(cursor, cursor);
-      } catch (_) {}
-    };
-    applyFocus();
-    requestAnimationFrame(applyFocus);
+    input.focus({ preventScroll: true });
+    const cursor = input.value.length;
+    try {
+      input.setSelectionRange(cursor, cursor);
+    } catch (_) {}
   }
 
   function currentLanguagePair() {
@@ -874,15 +870,18 @@
       setRequestStatus("");
       renderIdle();
       closeHistory();
-      focusQueryInput();
+      $("#query-input").focus();
     });
     $("#query-input").addEventListener("keydown", event => {
       if (event.key === "Enter" && !event.shiftKey) {
         event.preventDefault();
         runManual(event.ctrlKey ? "drug" : "word");
       }
+      if (event.key === "Escape") {
+        if (!$("#history-popover").hidden) closeHistory();
+        else api.hideWindow();
+      }
     });
-    document.addEventListener("keydown", handleEscape);
 
     $("#settings-button").addEventListener("click", () => { void openSettings(); });
     $("#selection-status").addEventListener("click", () => { void openSettings(); });
@@ -1028,10 +1027,12 @@
       setActiveMode("word");
       setBusy(false);
       setRequestStatus(payload?.message || "未读取到选中文本", "error");
-      focusQueryInput();
+      $("#query-input").focus();
     });
     api.onSelectionStatus(updateSelectionStatus);
-    api.onWindowFocusInput(focusQueryInput);
+    api.onWindowShow(() => {
+      setTimeout(focusQueryInput, 0);
+    });
   }
 
   async function init() {
@@ -1056,7 +1057,7 @@
       $("#pin-button").classList.toggle("active", pinned);
       updateSelectionStatus(selectionStatus);
       renderIdle();
-      focusQueryInput();
+      $("#query-input").focus();
     } catch (error) {
       $("#results").innerHTML = `<div class="notice error"><strong>Medict 初始化失败</strong>${esc(error.message || error)}</div>`;
     }
