@@ -79,6 +79,7 @@ Windows 助手优先通过 UI Automation 读取选中文字；不支持的应用
 ## 项目结构
 
 ```text
+crates/medict-core/          Rust 共享词典 / 药物查询核心
 src/renderer/                 紧凑单窗口 UI
 src/main/main.js              窗口、托盘、并行查询和 IPC
 src/main/services/word-lookup.js 在线词典 / 云端回退编排

@@ -1,6 +1,6 @@
 fn main() {
-    println!("cargo:rerun-if-changed=../tauri-app/src-tauri/src/word_lookup.rs");
-    println!("cargo:rerun-if-changed=../tauri-app/src-tauri/src/drug_lookup.rs");
+    println!("cargo:rerun-if-changed=../crates/medict-core/src/word_lookup.rs");
+    println!("cargo:rerun-if-changed=../crates/medict-core/src/drug_lookup.rs");
     println!("cargo:rerun-if-changed=medict.rc");
     println!("cargo:rerun-if-changed=../build/medict.ico");
 

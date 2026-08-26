@@ -4,28 +4,79 @@ use std::time::Duration;
 use reqwest::{Client, StatusCode};
 use serde_json::{json, Value};
 
+use crate::providers;
+
 const FREE_DICTIONARY_URL: &str = "https://api.dictionaryapi.dev/api/v2/entries/en/";
 const YOUDAO_FAST_URL: &str = "https://dict.youdao.com/jsonapi";
+const YOUDAO_V4_URL: &str = "https://dict.youdao.com/jsonapi_s?doctype=json&jsonversion=4";
+const YOUDAO_WEB_CLIENT_KEY: &str = "Mk6hqtUp33DGGtoS63tTJbMUYjRrG1Lu";
 const YOUDAO_FAST_SECTIONS: &str = "{\"count\":99,\"dicts\":[[\"web_trans\",\"ec\",\"ce\",\"simple\",\"phrs\",\"syno\",\"collins_primary\",\"rel_word\",\"blng_sents_part\",\"auth_sents_part\",\"expand_ec\",\"meta\"]]}";
 const MAX_SENSES: usize = 36;
 const MAX_EXAMPLES: usize = 48;
+const DEFAULT_SERVICE_ORDER: [&str; 4] = ["youdaoDictionary", "freeDictionary", "baidu", "google"];
 
 #[derive(Clone, Debug)]
 pub struct LookupConfig {
     pub youdao_enabled: bool,
     pub free_dictionary_enabled: bool,
+    pub google_enabled: bool,
+    pub google_mode: String,
+    pub google_api_key: String,
+    pub baidu_enabled: bool,
+    pub baidu_api_key: String,
+    pub baidu_secret_key: String,
+    pub oxford_enabled: bool,
+    pub oxford_app_id: String,
+    pub oxford_app_key: String,
+    pub oxford_locale: String,
+    pub merriam_webster_enabled: bool,
+    pub merriam_webster_api_key: String,
     pub service_order: Vec<String>,
     pub source_language: String,
     pub target_language: String,
+}
+
+impl Default for LookupConfig {
+    fn default() -> Self {
+        Self {
+            youdao_enabled: true,
+            free_dictionary_enabled: true,
+            google_enabled: true,
+            google_mode: "web".to_string(),
+            google_api_key: String::new(),
+            baidu_enabled: false,
+            baidu_api_key: String::new(),
+            baidu_secret_key: String::new(),
+            oxford_enabled: false,
+            oxford_app_id: String::new(),
+            oxford_app_key: String::new(),
+            oxford_locale: "en-gb".to_string(),
+            merriam_webster_enabled: false,
+            merriam_webster_api_key: String::new(),
+            service_order: DEFAULT_SERVICE_ORDER
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
+            source_language: "auto".to_string(),
+            target_language: "zh-CN".to_string(),
+        }
+    }
 }
 
 impl LookupConfig {
     fn enabled_provider_ids(&self) -> Vec<String> {
         let mut providers = Vec::new();
         for id in &self.service_order {
-            if (id == "youdaoDictionary" && self.youdao_enabled)
-                || (id == "freeDictionary" && self.free_dictionary_enabled)
-            {
+            let enabled = match id.as_str() {
+                "youdaoDictionary" => self.youdao_enabled,
+                "freeDictionary" => self.free_dictionary_enabled,
+                "baidu" => self.baidu_enabled,
+                "google" => self.google_enabled,
+                "oxford" => self.oxford_enabled,
+                "merriamWebster" => self.merriam_webster_enabled,
+                _ => false,
+            };
+            if enabled {
                 providers.push(id.clone());
             }
         }
@@ -34,6 +85,16 @@ impl LookupConfig {
         }
         if self.free_dictionary_enabled && !providers.iter().any(|id| id == "freeDictionary") {
             providers.push("freeDictionary".to_string());
+        }
+        for (enabled, id) in [
+            (self.baidu_enabled, "baidu"),
+            (self.google_enabled, "google"),
+            (self.oxford_enabled, "oxford"),
+            (self.merriam_webster_enabled, "merriamWebster"),
+        ] {
+            if enabled && !providers.iter().any(|value| value == id) {
+                providers.push(id.to_string());
+            }
         }
         providers
     }
@@ -50,7 +111,6 @@ struct LanguagePair {
 #[derive(Default)]
 struct DefinitionRow {
     definition: String,
-    example: String,
     synonyms: Vec<String>,
     antonyms: Vec<String>,
 }
@@ -64,6 +124,17 @@ struct MeaningGroup {
 }
 
 pub async fn lookup_word(query: &str, config: LookupConfig) -> Result<Value, String> {
+    lookup_word_with_partial(query, config, |_| {}).await
+}
+
+pub async fn lookup_word_with_partial<F>(
+    query: &str,
+    config: LookupConfig,
+    mut on_partial: F,
+) -> Result<Value, String>
+where
+    F: FnMut(Value),
+{
     let query = clean(query);
     if query.is_empty() {
         return Err("请输入查询内容".to_string());
@@ -86,80 +157,204 @@ pub async fn lookup_word(query: &str, config: LookupConfig) -> Result<Value, Str
     } else {
         query.clone()
     };
-    let (youdao_result, free_result) = futures::join!(
-        query_youdao(
-            &word,
-            config.youdao_enabled,
-            &language_pair,
-            dictionary_query
-        ),
-        query_free_dictionary(&word, config.free_dictionary_enabled && english_query)
-    );
+    let youdao_result = query_youdao(
+        &word,
+        config.youdao_enabled,
+        &language_pair,
+        dictionary_query,
+    )
+    .await;
     let mut entries = Vec::new();
     let mut cloud_results = Vec::new();
     let mut warnings = Vec::new();
+    let mut partial_ready = false;
     match youdao_result {
         Ok(Some(entry)) if entry.get("type").and_then(Value::as_str) == Some("translation") => {
             cloud_results.push(entry)
         }
-        Ok(Some(entry)) => entries.push(entry),
+        Ok(Some(entry)) => {
+            entries.push(entry);
+            partial_ready = true;
+        }
         Ok(None) => {}
         Err(error) => warnings.push(error),
     }
+
+    if partial_ready {
+        on_partial(compose_lookup_result(
+            word.clone(),
+            entries.clone(),
+            cloud_results.clone(),
+            providers.clone(),
+            warnings.clone(),
+            &language_pair,
+            &config.service_order,
+            true,
+        ));
+    }
+
+    let (free_result, baidu_result, google_result, oxford_result, merriam_result) = futures::join!(
+        query_free_dictionary(&word, config.free_dictionary_enabled && english_query),
+        providers::query_baidu(
+            &query,
+            &config,
+            &language_pair.source,
+            &language_pair.target,
+            dictionary_query,
+        ),
+        providers::query_google(
+            &query,
+            &config,
+            &language_pair.source,
+            &language_pair.target,
+        ),
+        providers::query_oxford(&word, &config),
+        providers::query_merriam_webster(&word, &config),
+    );
     match free_result {
         Ok(Some(entry)) => entries.push(entry),
         Ok(None) => {}
         Err(error) => warnings.push(error),
     }
-    entries.sort_by_key(|entry| {
-        let provider = entry
-            .get("provider")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let id = if provider == "youdao-dictionary" {
-            "youdaoDictionary"
-        } else {
-            "freeDictionary"
-        };
-        config
-            .service_order
-            .iter()
-            .position(|value| value == id)
-            .unwrap_or(config.service_order.len())
-    });
 
-    if entries.is_empty() {
-        if !cloud_results.is_empty() {
-            return Ok(json!({
-                "type": "word-lookup",
-                "success": true,
-                "query": word,
-                "dictionaryResults": [],
-                "cloudResults": cloud_results,
-                "displayResults": [],
-                "providers": providers,
-                "warnings": warnings,
-                "sourceLanguage": language_pair.source,
-                "targetLanguage": language_pair.target,
-                "migration": { "implemented": true, "feature": "youdao-web-translation" }
-            }));
-        }
-        return Ok(empty_result(&word, providers, warnings));
-    }
+    append_provider_result(
+        &mut entries,
+        &mut cloud_results,
+        baidu_result,
+        &mut warnings,
+    );
+    append_cloud_result(&mut cloud_results, google_result, &mut warnings);
+    append_provider_result(
+        &mut entries,
+        &mut cloud_results,
+        oxford_result,
+        &mut warnings,
+    );
+    append_provider_result(
+        &mut entries,
+        &mut cloud_results,
+        merriam_result,
+        &mut warnings,
+    );
 
-    Ok(json!({
+    let result = compose_lookup_result(
+        word,
+        entries,
+        cloud_results,
+        providers,
+        warnings,
+        &language_pair,
+        &config.service_order,
+        false,
+    );
+    Ok(result)
+}
+
+fn compose_lookup_result(
+    query: String,
+    mut entries: Vec<Value>,
+    mut cloud_results: Vec<Value>,
+    providers: Vec<String>,
+    warnings: Vec<String>,
+    language_pair: &LanguagePair,
+    service_order: &[String],
+    partial: bool,
+) -> Value {
+    entries.sort_by_key(|entry| service_rank(entry, service_order));
+    cloud_results.sort_by_key(|entry| service_rank(entry, service_order));
+    let display_results = entries
+        .iter()
+        .cloned()
+        .map(|mut entry| {
+            entry["displayType"] = json!("dictionary");
+            entry
+        })
+        .chain(cloud_results.iter().cloned().map(|mut entry| {
+            entry["displayType"] = json!("cloud");
+            entry
+        }))
+        .collect::<Vec<_>>();
+    json!({
         "type": "word-lookup",
-        "success": true,
-        "query": word,
-        "dictionaryResults": entries.clone(),
+        "success": !entries.is_empty() || !cloud_results.is_empty(),
+        "query": query,
+        "strategy": if entries.is_empty() { "cloud" } else { "online-dictionary" },
+        "partial": partial,
+        "dictionaryResults": entries,
         "cloudResults": cloud_results,
-        "displayResults": entries,
+        "displayResults": display_results,
         "providers": providers,
         "warnings": warnings,
         "sourceLanguage": language_pair.source,
         "targetLanguage": language_pair.target,
-        "migration": { "implemented": true, "feature": "dictionary-providers" }
-    }))
+        "migration": { "implemented": true, "feature": "dictionary-and-translation-providers" }
+    })
+}
+
+fn append_cloud_result(
+    cloud_results: &mut Vec<Value>,
+    result: Result<Option<Value>, String>,
+    warnings: &mut Vec<String>,
+) {
+    match result {
+        Ok(Some(entry)) => cloud_results.push(entry),
+        Ok(None) => {}
+        Err(error) => warnings.push(error),
+    }
+}
+
+fn append_provider_result(
+    entries: &mut Vec<Value>,
+    cloud_results: &mut Vec<Value>,
+    result: Result<Option<Value>, String>,
+    warnings: &mut Vec<String>,
+) {
+    match result {
+        Ok(Some(mut entry)) => {
+            let dictionary_entry = entry.get("dictionaryEntry").cloned();
+            if let Some(dictionary_entry) = dictionary_entry {
+                entries.push(dictionary_entry);
+                entry
+                    .as_object_mut()
+                    .map(|object| object.remove("dictionaryEntry"));
+                if entry
+                    .get("translations")
+                    .and_then(Value::as_array)
+                    .is_some_and(|rows| !rows.is_empty())
+                {
+                    // The Electron result contract treats a Baidu row with a
+                    // dictionary payload as a dictionary result; its
+                    // translations are already attached to the senses.
+                }
+            } else if entry.get("type").and_then(Value::as_str) == Some("suggestions") {
+                cloud_results.push(entry);
+            } else {
+                entries.push(entry);
+            }
+        }
+        Ok(None) => {}
+        Err(error) => warnings.push(error),
+    }
+}
+
+fn service_rank(value: &Value, order: &[String]) -> usize {
+    let provider = value
+        .get("provider")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let id = match provider {
+        "youdao-dictionary" | "youdao-web" => "youdaoDictionary",
+        "free-dictionary" => "freeDictionary",
+        provider if provider.contains("baidu") => "baidu",
+        provider if provider.contains("google") => "google",
+        "merriam-webster" => "merriamWebster",
+        "oxford" => "oxford",
+        other => other,
+    };
+    order
+        .iter()
+        .position(|value| value == id)
+        .unwrap_or(order.len() + 100)
 }
 
 fn empty_result(query: &str, providers: Vec<String>, warnings: Vec<String>) -> Value {
@@ -304,7 +499,7 @@ async fn query_youdao(
         urlencoding::encode(&language_pair.lookup_language),
         urlencoding::encode(YOUDAO_FAST_SECTIONS)
     );
-    let response = client
+    let fast_response = client
         .get(url)
         .header("Accept", "application/json")
         .header("Referer", "https://fanyi.youdao.com/")
@@ -314,19 +509,78 @@ async fn query_youdao(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36",
         )
         .send()
+        .await;
+    let fast_error = match fast_response {
+        Ok(response) => {
+            if response.status().is_success() {
+                match response.json::<Value>().await {
+                    Ok(data) => {
+                        let fast_result = if dictionary_query {
+                            normalize_youdao_fast(&data, query, language_pair)
+                        } else {
+                            normalize_youdao_translation(&data, query, language_pair)
+                        };
+                        if fast_result.is_some() {
+                            return Ok(fast_result);
+                        }
+                        "网易有道快速通道没有可用结果".to_string()
+                    }
+                    Err(error) => format!("解析网易有道快速响应失败：{error}"),
+                }
+            } else {
+                format!("网易有道快速通道返回 HTTP {}", response.status())
+            }
+        }
+        Err(error) => format!("网易有道快速通道请求失败：{error}"),
+    };
+
+    match query_youdao_v4(query, language_pair).await {
+        Ok(Some(result)) => Ok(Some(result)),
+        Ok(None) => Err(fast_error),
+        Err(error) => Err(format!("{fast_error}；V4 后备通道失败：{error}")),
+    }
+}
+
+async fn query_youdao_v4(
+    query: &str,
+    language_pair: &LanguagePair,
+) -> Result<Option<Value>, String> {
+    let text = clean(query);
+    let web_word = format!("{text}webdict");
+    let time = web_word.encode_utf16().count() % 10;
+    let salt = md5_hex(&web_word);
+    let sign = md5_hex(&format!("web{text}{time}{YOUDAO_WEB_CLIENT_KEY}{salt}"));
+    let body = format!(
+        "q={}&le={}&client=web&t={}&sign={}&keyfrom=webdict",
+        urlencoding::encode(&text),
+        urlencoding::encode(&language_pair.lookup_language),
+        time,
+        sign
+    );
+    let client = build_client(16)?;
+    let response = client
+        .post(YOUDAO_V4_URL)
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+        .header("Referer", "https://fanyi.youdao.com/")
+        .header("Cookie", "OUTFOX_SEARCH_USER_ID=1796239350@10.110.96.157;")
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36",
+        )
+        .body(body)
+        .send()
         .await
-        .map_err(|error| format!("网易有道网页词典请求失败：{error}"))?;
+        .map_err(|error| format!("网易有道 V4 请求失败：{error}"))?;
     if !response.status().is_success() {
-        return Err(format!("网易有道网页词典返回 HTTP {}", response.status()));
+        return Err(format!("网易有道 V4 返回 HTTP {}", response.status()));
     }
     let data = response
         .json::<Value>()
         .await
-        .map_err(|error| format!("解析网易有道网页词典响应失败：{error}"))?;
-    if dictionary_query {
-        if let Some(entry) = normalize_youdao_fast(&data, query, language_pair) {
-            return Ok(Some(entry));
-        }
+        .map_err(|error| format!("解析网易有道 V4 响应失败：{error}"))?;
+    if let Some(result) = normalize_youdao_fast(&data, query, language_pair) {
+        return Ok(Some(result));
     }
     Ok(normalize_youdao_translation(&data, query, language_pair))
 }
@@ -1520,7 +1774,6 @@ fn normalize_free_dictionary(data: &Value, query: &str) -> Option<Value> {
                     }
                     definitions.push(DefinitionRow {
                         definition,
-                        example,
                         synonyms: unique_strings(string_values(row.get("synonyms"))),
                         antonyms: unique_strings(string_values(row.get("antonyms"))),
                     });
@@ -1768,10 +2021,73 @@ fn is_foreign_dictionary_word(value: &str) -> bool {
     })
 }
 
+// The Youdao web endpoint signs its public request with MD5. Keeping this
+// small implementation local avoids adding a crypto dependency to every UI
+// client while preserving the same fallback request as the Electron client.
+fn md5_hex(value: &str) -> String {
+    let mut message = value.as_bytes().to_vec();
+    let bit_length = (message.len() as u64) * 8;
+    message.push(0x80);
+    while message.len() % 64 != 56 {
+        message.push(0);
+    }
+    message.extend_from_slice(&bit_length.to_le_bytes());
+
+    let shifts: [u32; 64] = [
+        7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5,
+        9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10,
+        15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+    ];
+    let mut state = [0x6745_2301_u32, 0xefcd_ab89, 0x98ba_dcfe, 0x1032_5476];
+
+    for chunk in message.chunks_exact(64) {
+        let mut words = [0u32; 16];
+        for (index, word) in words.iter_mut().enumerate() {
+            let offset = index * 4;
+            *word = u32::from_le_bytes([
+                chunk[offset],
+                chunk[offset + 1],
+                chunk[offset + 2],
+                chunk[offset + 3],
+            ]);
+        }
+        let (mut a, mut b, mut c, mut d) = (state[0], state[1], state[2], state[3]);
+        for index in 0..64 {
+            let (function, word_index) = match index {
+                0..=15 => ((b & c) | ((!b) & d), index),
+                16..=31 => ((d & b) | ((!d) & c), (5 * index + 1) % 16),
+                32..=47 => (b ^ c ^ d, (3 * index + 5) % 16),
+                _ => (c ^ (b | !d), (7 * index) % 16),
+            };
+            let constant = ((f64::sin((index + 1) as f64).abs() * 4_294_967_296.0).floor()) as u32;
+            let next = a
+                .wrapping_add(function)
+                .wrapping_add(constant)
+                .wrapping_add(words[word_index])
+                .rotate_left(shifts[index]);
+            let next = b.wrapping_add(next);
+            a = d;
+            d = c;
+            c = b;
+            b = next;
+        }
+        state[0] = state[0].wrapping_add(a);
+        state[1] = state[1].wrapping_add(b);
+        state[2] = state[2].wrapping_add(c);
+        state[3] = state[3].wrapping_add(d);
+    }
+
+    state
+        .iter()
+        .flat_map(|word| word.to_le_bytes())
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        legacy_youdao_senses, normalize_part_of_speech, normalize_youdao_fast,
+        legacy_youdao_senses, md5_hex, normalize_part_of_speech, normalize_youdao_fast,
         resolve_language_pair, youdao_audio,
     };
     use serde_json::json;
@@ -1881,5 +2197,11 @@ mod tests {
             normalize_youdao_fast(&data, "苹果", &pair).expect("Chinese dictionary result");
         assert_eq!(result["senses"][0]["translations"][0], "apple");
         assert_eq!(result["meta"]["targetLanguage"], "en");
+    }
+
+    #[test]
+    fn signs_youdao_fallback_payload_with_md5() {
+        assert_eq!(md5_hex(""), "d41d8cd98f00b204e9800998ecf8427e");
+        assert_eq!(md5_hex("abc"), "900150983cd24fb0d6963f7d28e17f72");
     }
 }

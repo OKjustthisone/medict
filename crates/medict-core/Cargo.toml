@@ -1,0 +1,14 @@
+[package]
+name = "medict-core"
+version = "0.1.0"
+description = "Shared Rust query core for Medict clients"
+authors = ["Medict"]
+edition = "2021"
+rust-version = "1.77"
+
+[dependencies]
+futures = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
+serde_json = "1"
+tokio = { version = "1", features = ["time"] }
+urlencoding = "2"

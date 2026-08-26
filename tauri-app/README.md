@@ -25,6 +25,9 @@ tauri-app/
 └─ README.md
 ```
 
+The repository-level `crates/medict-core/` directory contains the shared Rust
+dictionary and drug query core used by this workspace and the Native Win32 client.
+
 ## Run after installing prerequisites
 
 From this directory:
@@ -50,13 +53,15 @@ Free Dictionary, RxNorm, RxClass and PubChem. They run from the Rust side so
 the renderer does not receive network or credential privileges. The remaining
 providers are being ported one at a time behind the same result contract.
 
+The dictionary and drug provider implementations now live in the repository-level
+`crates/medict-core` crate and are shared with the Native Win32 client.
+
 Not yet ported:
 
 - Baidu, Google and other dictionary/translation HTTP providers;
 - DrugShop's ChEMBL, FDA and ClinicalTrials.gov enrichment pipeline;
 - Windows selection helper and automatic selection monitor;
 - global shortcuts and shortcut recording;
-- system tray menu and close-to-tray behavior;
 - Electron-specific cache and partial-result streaming.
 
 The remaining placeholder responses identify these boundaries instead of

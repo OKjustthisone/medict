@@ -1,10 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-#[path = "../../tauri-app/src-tauri/src/drug_lookup.rs"]
-mod drug_lookup;
-#[path = "../../tauri-app/src-tauri/src/word_lookup.rs"]
-mod word_lookup;
-
 mod modern_d2d;
 
 use std::{
@@ -19,6 +14,7 @@ use std::{
     time::Duration,
 };
 
+use medict_core::{drug_lookup, word_lookup};
 use modern_d2d::{DisplayLine, LineStyle, Renderer};
 use serde_json::Value;
 use windows::{
@@ -870,6 +866,7 @@ fn perform_lookup(
                     service_order: vec!["youdaoDictionary".into(), "freeDictionary".into()],
                     source_language: "auto".into(),
                     target_language: "zh-CN".into(),
+                    ..Default::default()
                 },
             )),
             QueryKind::Drug => runtime.block_on(drug_lookup::lookup_drug(&query)),

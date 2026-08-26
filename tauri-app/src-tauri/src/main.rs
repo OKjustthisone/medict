@@ -14,16 +14,16 @@ use std::{
 };
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use medict_core::{drug_lookup, word_lookup};
 use serde_json::{json, Value};
 use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, RunEvent, State, WebviewWindowBuilder, Window, WindowEvent,
 };
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
-
-mod drug_lookup;
-mod word_lookup;
 
 struct AppState {
     settings: Mutex<Value>,
@@ -129,10 +129,6 @@ fn load_settings(path: &PathBuf) -> Value {
 fn write_settings(path: &PathBuf, value: &Value) -> Result<(), String> {
     let contents = serde_json::to_string_pretty(value).map_err(|error| error.to_string())?;
     fs::write(path, contents).map_err(|error| error.to_string())
-}
-
-fn migration_warning(feature: &str) -> String {
-    format!("Tauri 迁移骨架尚未迁移 {feature}；当前响应仅用于验证 UI 和命令边界")
 }
 
 #[tauri::command]
@@ -262,6 +258,7 @@ fn lookup_config(state: &State<'_, AppState>) -> Result<word_lookup::LookupConfi
                 service_order,
                 source_language,
                 target_language,
+                ..Default::default()
             }
         })
         .map_err(|_| "读取词典服务设置失败".to_string())
@@ -882,6 +879,50 @@ fn open_external(url: String) -> Result<(), String> {
     result.map(|_| ()).map_err(|error| error.to_string())
 }
 
+fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
+    let show_item = MenuItem::with_id(app, "show", "显示 Medict", true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, "quit", "退出 Medict", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+    let icon = app
+        .default_window_icon()
+        .cloned()
+        .ok_or_else(|| tauri::Error::AssetNotFound("默认应用图标".to_string()))?;
+
+    TrayIconBuilder::with_id("main-tray")
+        .icon(icon)
+        .tooltip("Medict")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "show" => {
+                if let Err(error) = show_main_window(app) {
+                    eprintln!("Medict could not be shown from the tray: {error}");
+                }
+            }
+            "quit" => {
+                stop_hotkey_manager(app);
+                stop_selection_monitor(app);
+                app.exit(0);
+            }
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                if let Err(error) = show_main_window(tray.app_handle()) {
+                    eprintln!("Medict could not be shown from the tray icon: {error}");
+                }
+            }
+        })
+        .build(app)?;
+
+    Ok(())
+}
+
 fn main() {
     tauri::Builder::default()
         .on_window_event(|window, event| {
@@ -897,6 +938,7 @@ fn main() {
             }
         })
         .setup(|app| {
+            setup_tray(app)?;
             let path = settings_path(app.handle())?;
             let settings = load_settings(&path);
             if settings
