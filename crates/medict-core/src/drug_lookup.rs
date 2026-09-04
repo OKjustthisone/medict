@@ -24,16 +24,28 @@ pub async fn lookup_drug(query: &str) -> Result<Value, String> {
     let mut warnings = Vec::new();
     let rx = resolve_rxnorm(&client, &query, &mut warnings).await;
     let rxcui = rx.get("rxcui").and_then(Value::as_str).unwrap_or_default();
+    // Resolve brand names to the ingredient before querying the other data
+    // sources.  This makes a generic name and its brand (for example,
+    // pembrolizumab and Keytruda) use the same PubChem, ChEMBL, FDA and
+    // ClinicalTrials.gov lookup key.
+    let provider_query = if !rxcui.is_empty() {
+        first_non_empty(&[
+            clean_value(rx.get("canonicalName")),
+            query.clone(),
+        ])
+    } else {
+        query.clone()
+    };
 
     let mut chembl_warnings = Vec::new();
     let mut pubchem_warnings = Vec::new();
     let mut fda_warnings = Vec::new();
     let mut trials_warnings = Vec::new();
     let (chembl, pubchem, fda, trials) = futures::join!(
-        get_chembl(&client, &query, &mut chembl_warnings),
-        get_pubchem(&client, &query, &mut pubchem_warnings),
-        get_fda(&client, &query, &mut fda_warnings),
-        get_trials(&client, std::slice::from_ref(&query), &mut trials_warnings)
+        get_chembl(&client, &provider_query, &mut chembl_warnings),
+        get_pubchem(&client, &provider_query, &mut pubchem_warnings),
+        get_fda(&client, &provider_query, &mut fda_warnings),
+        get_trials(&client, std::slice::from_ref(&provider_query), &mut trials_warnings)
     );
     let mut rxnav_warnings = Vec::new();
     let rxnav = get_rxnav(&client, rxcui, &mut rxnav_warnings).await;
@@ -47,21 +59,18 @@ pub async fn lookup_drug(query: &str) -> Result<Value, String> {
     let rxnav = rxnav.unwrap_or_default();
     let fda = fda.unwrap_or_default();
     let trials = trials.unwrap_or_default();
-    let canonical_name = first_non_empty(&[
-        clean_value(chembl.get("preferredName")),
-        rx.get("canonicalName")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-        query.clone(),
-    ]);
-    let aliases = unique_strings(
-        std::iter::once(query.clone())
-            .chain(std::iter::once(canonical_name.clone()))
-            .chain(string_values(rx.get("aliases")))
-            .chain(string_values(chembl.get("aliases")))
-            .collect(),
-    );
+    let canonical_name = if !rxcui.is_empty() {
+        first_non_empty(&[
+            clean_value(rx.get("canonicalName")),
+            clean_value(chembl.get("preferredName")),
+            query.clone(),
+        ])
+    } else {
+        first_non_empty(&[
+            clean_value(chembl.get("preferredName")),
+            query.clone(),
+        ])
+    };
     let brand_names = unique_strings(
         fda.iter()
             .flat_map(|record| string_values(record.get("brandNames")))
@@ -74,6 +83,15 @@ pub async fn lookup_drug(query: &str) -> Result<Value, String> {
                 fda.iter()
                     .flat_map(|record| string_values(record.get("genericNames"))),
             )
+            .collect(),
+    );
+    let aliases = unique_strings(
+        std::iter::once(query.clone())
+            .chain(std::iter::once(canonical_name.clone()))
+            .chain(string_values(rx.get("aliases")))
+            .chain(string_values(chembl.get("aliases")))
+            .chain(brand_names.clone())
+            .chain(generic_names.clone())
             .collect(),
     );
     let success = !rxcui.is_empty() || chembl.is_object() || !fda.is_empty();
@@ -230,6 +248,13 @@ async fn resolve_rxnorm(client: &Client, query: &str, warnings: &mut Vec<String>
         .iter()
         .find(|row| clean_value(row.get("tty")) == "IN")
         .or_else(|| concepts.first());
+    // The matched RxNorm concept may be a branded product.  Use its
+    // ingredient RxCUI for the stable identity and downstream lookups so
+    // brand and generic queries converge on one result set.
+    let canonical_rxcui = ingredient
+        .map(|row| clean_value(row.get("rxcui")))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| rxcui.clone());
     let canonical_name = properties
         .get("properties")
         .and_then(|value| value.get("name"))
@@ -252,7 +277,8 @@ async fn resolve_rxnorm(client: &Client, query: &str, warnings: &mut Vec<String>
         })
         .unwrap_or_default();
     json!({
-        "rxcui": rxcui,
+        "rxcui": canonical_rxcui,
+        "matchedRxcui": rxcui,
         "canonicalName": canonical_name,
         "aliases": unique_strings(aliases)
     })

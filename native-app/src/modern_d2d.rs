@@ -28,8 +28,14 @@ use windows::{
 use windows_numerics::{Matrix3x2, Vector2};
 
 pub const TITLEBAR_HEIGHT: i32 = 34;
-pub const RESULT_TOP: i32 = 222 + TITLEBAR_HEIGHT;
-const RESULT_CONTENT_TOP: f32 = 284.0 + TITLEBAR_HEIGHT as f32;
+pub const LANGUAGE_ROW_TOP: i32 = 64 + TITLEBAR_HEIGHT;
+pub const LANGUAGE_ROW_BOTTOM: i32 = 88 + TITLEBAR_HEIGHT;
+pub const LANGUAGE_SWAP_LEFT: i32 = 92;
+pub const LANGUAGE_SWAP_RIGHT: i32 = 122;
+pub const QUERY_TOOLS_TOP: i32 = 64 + TITLEBAR_HEIGHT;
+pub const QUERY_TOOLS_BOTTOM: i32 = 96 + TITLEBAR_HEIGHT;
+pub const RESULT_TOP: i32 = 180 + TITLEBAR_HEIGHT;
+const RESULT_CONTENT_TOP: f32 = 242.0 + TITLEBAR_HEIGHT as f32;
 
 #[derive(Clone, Copy)]
 pub enum LineStyle {
@@ -184,10 +190,6 @@ impl Renderer {
             let _ = target.EndDraw(None, None);
             return;
         };
-        let Some(language_fill) = self.brush(target, color(0.906, 0.906, 0.894)) else {
-            let _ = target.EndDraw(None, None);
-            return;
-        };
         let Some(panel) = self.brush(target, color(1.0, 1.0, 1.0)) else {
             let _ = target.EndDraw(None, None);
             return;
@@ -244,8 +246,8 @@ impl Renderer {
 
         let top_bar = TITLEBAR_HEIGHT as f32;
         let query_top = top_bar + 8.0;
-        let language_top = top_bar + 104.0;
-        let status_top = top_bar + 190.0;
+        let language_top = LANGUAGE_ROW_TOP as f32;
+        let status_top = top_bar + 148.0;
 
         self.draw_titlebar(
             target,
@@ -282,28 +284,6 @@ impl Renderer {
             11.0,
         );
         self.draw_query_tools(target, width, top_bar, &tool_brush);
-        self.fill_round(
-            target,
-            &D2D_RECT_F {
-                left: 8.0,
-                top: language_top,
-                right: width.saturating_sub(8) as f32,
-                bottom: language_top + 34.0,
-            },
-            &language_fill,
-            9.0,
-        );
-        self.outline_round(
-            target,
-            &D2D_RECT_F {
-                left: 8.0,
-                top: language_top,
-                right: width.saturating_sub(8) as f32,
-                bottom: language_top + 34.0,
-            },
-            &line_brush,
-            9.0,
-        );
         self.draw_text(
             target,
             source_language,
@@ -311,9 +291,9 @@ impl Renderer {
             &ink,
             D2D_RECT_F {
                 left: 18.0,
-                top: language_top + 7.0,
-                right: width as f32 * 0.46,
-                bottom: language_top + 28.0,
+                top: language_top + 2.0,
+                right: LANGUAGE_SWAP_LEFT as f32 - 4.0,
+                bottom: language_top + 24.0,
             },
         );
         self.draw_text(
@@ -322,10 +302,10 @@ impl Renderer {
             &ui_bold_format,
             &muted,
             D2D_RECT_F {
-                left: width as f32 * 0.46,
-                top: language_top + 6.0,
-                right: width as f32 * 0.54,
-                bottom: language_top + 29.0,
+                left: LANGUAGE_SWAP_LEFT as f32,
+                top: language_top + 1.0,
+                right: LANGUAGE_SWAP_RIGHT as f32,
+                bottom: language_top + 25.0,
             },
         );
         self.draw_text(
@@ -334,10 +314,10 @@ impl Renderer {
             &ui_bold_format,
             &ink,
             D2D_RECT_F {
-                left: width as f32 * 0.54,
-                top: language_top + 7.0,
-                right: width.saturating_sub(18) as f32,
-                bottom: language_top + 28.0,
+                left: LANGUAGE_SWAP_RIGHT as f32 + 4.0,
+                top: language_top + 2.0,
+                right: width.saturating_sub(86) as f32,
+                bottom: language_top + 24.0,
             },
         );
 

@@ -3,7 +3,7 @@ const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
-const { DrugCache, normalizeDrugCacheKey, SEVEN_DAYS_MS } = require("../src/main/drug-cache");
+const { DrugCache, normalizeDrugCacheKey, THIRTY_DAYS_MS } = require("../src/main/drug-cache");
 const { normalizeAccelerator, registerShortcutConfiguration, validateShortcutConfiguration } = require("../src/main/shortcut-manager");
 const { buildYoudaoDictionaryPayload, normalizeFreeDictionary, normalizeMerriamItem, normalizeYoudaoDictionary, normalizeYoudaoLegacyPayload, normalizeYoudaoTranslation } = require("../src/main/services/dictionary-api");
 const { chooseChemblCandidate, hasDrugIdentity } = require("../src/main/services/drugshop");
@@ -658,7 +658,7 @@ test("recognizes an empty one-shot selection response", () => {
   assert.deepEqual(parseSelectionLine("EMPTY"), { type: "empty" });
 });
 
-test("persists drug results for seven days and expires them afterwards", async () => {
+test("persists drug results for thirty days and expires them afterwards", async () => {
   const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "medict-cache-test-"));
   const cachePath = path.join(tempDirectory, "drug-cache.json");
   let now = Date.UTC(2026, 7, 8, 0, 0, 0);
@@ -669,16 +669,64 @@ test("persists drug results for seven days and expires them afterwards", async (
 
     const sameSession = await first.get("aspirin");
     assert.equal(sameSession.result.name, "Aspirin");
-    assert.equal(sameSession.expiresAt - sameSession.cachedAt, SEVEN_DAYS_MS);
+    assert.equal(sameSession.expiresAt - sameSession.cachedAt, THIRTY_DAYS_MS);
 
     const afterRestart = new DrugCache(cachePath, { now: () => now });
     await afterRestart.load();
     assert.equal((await afterRestart.get("ASPIRIN")).result.success, true);
     assert.equal(afterRestart.stats().count, 1);
 
-    now += SEVEN_DAYS_MS + 1;
+    now += THIRTY_DAYS_MS + 1;
     assert.equal(await afterRestart.get("aspirin"), null);
     assert.equal(afterRestart.stats().count, 0);
+  } finally {
+    await fs.rm(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test("matches drug cache entries through generic and brand names", async () => {
+  const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "medict-cache-alias-test-"));
+  const cachePath = path.join(tempDirectory, "drug-cache.json");
+  try {
+    const cache = new DrugCache(cachePath, { now: () => Date.UTC(2026, 7, 8) });
+    await cache.load();
+    await cache.set("pembrolizumab", {
+      type: "drug",
+      success: true,
+      name: "pembrolizumab",
+      names: {
+        preferred: "pembrolizumab",
+        generic: ["pembrolizumab"],
+        brands: ["Keytruda"],
+        aliases: []
+      }
+    });
+    const hit = await cache.get(" KEYTRUDA ");
+    assert.equal(hit.result.name, "pembrolizumab");
+    assert.equal(cache.stats().count, 1);
+  } finally {
+    await fs.rm(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test("drops pre-canonicalization drug cache entries during the cache upgrade", async () => {
+  const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "medict-cache-migration-test-"));
+  const cachePath = path.join(tempDirectory, "drug-cache.json");
+  try {
+    await fs.writeFile(cachePath, JSON.stringify({
+      version: 2,
+      entries: {
+        keytruda: {
+          query: "keytruda",
+          cachedAt: Date.UTC(2026, 7, 8),
+          expiresAt: Date.UTC(2026, 7, 15),
+          result: { type: "drug", success: true, name: "pembrolizumab" }
+        }
+      }
+    }), "utf8");
+    const cache = new DrugCache(cachePath, { now: () => Date.UTC(2026, 7, 8) });
+    await cache.load();
+    assert.equal(cache.stats().count, 0);
   } finally {
     await fs.rm(tempDirectory, { recursive: true, force: true });
   }

@@ -252,7 +252,7 @@ fn run() -> windows::core::Result<()> {
             WS_POPUP | WS_THICKFRAME,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            440,
+            360,
             680,
             None,
             None,
@@ -523,13 +523,15 @@ unsafe extern "system" fn window_proc(
                 }
             }
 
-            if (TITLEBAR_HEIGHT + 104..=TITLEBAR_HEIGHT + 138).contains(&y)
-                && ((client.right / 2 - 24)..=(client.right / 2 + 24)).contains(&x)
+            if (modern_d2d::LANGUAGE_ROW_TOP..=modern_d2d::LANGUAGE_ROW_BOTTOM).contains(&y)
+                && (modern_d2d::LANGUAGE_SWAP_LEFT..=modern_d2d::LANGUAGE_SWAP_RIGHT).contains(&x)
             {
                 swap_languages(context);
+                let _ = InvalidateRect(Some(context.hwnd), None, false);
+                return LRESULT(0);
             }
 
-            if (TITLEBAR_HEIGHT + 70..=TITLEBAR_HEIGHT + 96).contains(&y) {
+            if (modern_d2d::QUERY_TOOLS_TOP..=modern_d2d::QUERY_TOOLS_BOTTOM).contains(&y) {
                 if (client.right - 92..=client.right - 64).contains(&x) {
                     let query = read_window_text(context.input);
                     let copied = write_clipboard_text(&query);
@@ -648,7 +650,7 @@ unsafe fn create_children(context: &mut AppContext) {
         20,
         TITLEBAR_HEIGHT + 15,
         480,
-        70,
+        48,
         Some(context.hwnd),
         Some(windows::Win32::UI::WindowsAndMessaging::HMENU(
             EDIT_ID as *mut c_void,
@@ -663,7 +665,7 @@ unsafe fn create_children(context: &mut AppContext) {
         w!("查询"),
         button_style,
         8,
-        TITLEBAR_HEIGHT + 146,
+        TITLEBAR_HEIGHT + 104,
         238,
         38,
         Some(context.hwnd),
@@ -680,7 +682,7 @@ unsafe fn create_children(context: &mut AppContext) {
         w!("药物查询"),
         button_style,
         254,
-        TITLEBAR_HEIGHT + 146,
+        TITLEBAR_HEIGHT + 104,
         238,
         38,
         Some(context.hwnd),
@@ -728,13 +730,13 @@ unsafe fn layout_children(context: &AppContext) {
         18,
         TITLEBAR_HEIGHT + 15,
         (width - 118).max(180),
-        72,
+        48,
         true,
     );
     let _ = MoveWindow(
         context.query_button,
         8,
-        TITLEBAR_HEIGHT + 146,
+        TITLEBAR_HEIGHT + 104,
         button_width,
         38,
         true,
@@ -742,7 +744,7 @@ unsafe fn layout_children(context: &AppContext) {
     let _ = MoveWindow(
         context.drug_button,
         15 + button_width,
-        TITLEBAR_HEIGHT + 146,
+        TITLEBAR_HEIGHT + 104,
         button_width,
         38,
         true,

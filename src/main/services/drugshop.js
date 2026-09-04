@@ -71,8 +71,13 @@ async function resolveRxNorm(query, warnings) {
   const concepts = ingredients?.allRelatedGroup?.conceptGroup?.flatMap(group => group.conceptProperties || []) || [];
   const ingredient = concepts.find(item => item.tty === "IN") || concepts[0];
   const aliases = unique(allProperties?.propConceptGroup?.propConcept?.map(item => item.propValue) || []);
+  // A brand query can resolve to a branded RxNorm concept. Use the related
+  // ingredient RxCUI as the stable identity so brand and generic searches
+  // share the same downstream data set.
+  const canonicalRxcui = ingredient?.rxcui || rxcui;
   return {
-    rxcui,
+    rxcui: canonicalRxcui,
+    matchedRxcui: rxcui,
     canonicalName: ingredient?.name || properties?.properties?.name || query,
     aliases
   };
@@ -269,20 +274,32 @@ async function searchDrug(query) {
   if (!trimmed) throw new Error("请输入药物名称或编号");
   const warnings = [];
   const rxPromise = resolveRxNorm(trimmed, warnings);
-  const chemblPromise = getChembl(trimmed, warnings);
+  const providerQueryPromise = rxPromise.then(rx => rx.rxcui ? (clean(rx.canonicalName) || trimmed) : trimmed);
+  const chemblPromise = providerQueryPromise.then(providerQuery => getChembl(providerQuery, warnings));
   const rxnavPromise = rxPromise.then(rx => getRxNav(rx.rxcui, warnings));
-  const [rx, chembl, rxnav, pubchem, fda, trials] = await Promise.all([
+  const [rx, providerQuery, chembl, rxnav, pubchem, fda, trials] = await Promise.all([
     rxPromise,
+    providerQueryPromise,
     chemblPromise,
     rxnavPromise,
-    getPubChem(trimmed, warnings),
-    getFda(trimmed, warnings),
-    getTrials([trimmed], warnings)
+    providerQueryPromise.then(value => getPubChem(value, warnings)),
+    providerQueryPromise.then(value => getFda(value, warnings)),
+    providerQueryPromise.then(value => getTrials([value], warnings))
   ]);
-  const canonicalName = chembl?.preferredName || rx.canonicalName || trimmed;
-  const aliases = uniqueNames([trimmed, canonicalName, ...rx.aliases, ...(chembl?.aliases || [])]);
+  const canonicalName = rx.rxcui
+    ? (clean(rx.canonicalName) || chembl?.preferredName || trimmed)
+    : (chembl?.preferredName || trimmed);
   const brandNames = unique(fda.flatMap(record => record.brandNames));
   const genericNames = unique([canonicalName, ...fda.flatMap(record => record.genericNames)]);
+  const aliases = uniqueNames([
+    trimmed,
+    providerQuery,
+    canonicalName,
+    ...rx.aliases,
+    ...(chembl?.aliases || []),
+    ...brandNames,
+    ...genericNames
+  ]);
   // ClinicalTrials.gov and PubChem can contain ordinary phrases or non-drug
   // chemicals. They enrich an identified drug, but must not establish drug
   // identity on their own or selection lookup will produce false positives.

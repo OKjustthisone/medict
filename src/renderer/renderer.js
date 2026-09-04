@@ -269,6 +269,10 @@
     return `<button class="copy-button" type="button" data-copy-scope="${esc(scope)}" title="${esc(label)}" aria-label="${esc(label)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7V4h11v13h-3v3H5V7h3Zm2 0h6v8h1V6h-7v1Zm-3 2v9h7V9H7Z"/></svg></button>`;
   }
 
+  function refreshButton(query) {
+    return `<button class="copy-button refresh-drug-button" type="button" data-refresh-drug="${esc(query)}" title="刷新药物数据（跳过缓存）" aria-label="刷新药物数据"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.9-4H3v3h3V8.2A6 6 0 1 1 6.1 16l-1.4 1.4A8 8 0 1 0 20 11ZM4 13a8 8 0 0 0 14.9 4H21v-3h-3v1.8A6 6 0 1 1 17.9 8l-1.4-1.4A8 8 0 0 0 4 13Z"/></svg></button>`;
+  }
+
   function readableText(element) {
     if (!element) return "";
     const clone = element.cloneNode(true);
@@ -574,7 +578,8 @@
   }
 
   function cacheBadge(result) {
-    return result?.cache?.hit ? '<span class="cache-chip">7 天缓存</span>' : "";
+    const ttlDays = Number(result?.cache?.ttlDays) || 30;
+    return result?.cache?.hit ? `<span class="cache-chip">${ttlDays} 天缓存</span>` : "";
   }
 
   function identifier(label, value, url) {
@@ -606,7 +611,7 @@
   }
 
   function detailSection(title, count, body, open = false) {
-    const badge = count != null ? `<span class="source-badge">${esc(count)}</span>` : "";
+    const badge = count != null ? `<span class="source-badge section-count">${esc(count)}</span>` : "";
     return `<details class="drug-section"${open ? " open" : ""}><summary><span>${esc(title)}</span>${badge}</summary><div class="section-content">${body}</div></details>`;
   }
 
@@ -617,7 +622,7 @@
     }
     if (!result) return loadingBlock("DRUG", query);
     if (!result.success) {
-      return `<section class="result-block"><div class="result-block-heading"><div class="heading-title"><span class="heading-label">DRUG</span><h2>${esc(query)}</h2></div><span class="source-badge">未命中</span>${cacheBadge(result)}</div><div class="not-found"><span class="not-found-mark">Rx</span><strong>未找到该药物</strong><p>已查询 DrugShop 的 RxNorm、ChEMBL、PubChem、FDA 与 ClinicalTrials.gov 数据链路。</p></div></section>`;
+      return `<section class="result-block"><div class="result-block-heading"><div class="heading-title"><span class="heading-label">DRUG</span><h2>${esc(query)}</h2></div>${refreshButton(query)}<span class="source-badge">未命中</span>${cacheBadge(result)}</div><div class="not-found"><span class="not-found-mark">Rx</span><strong>未找到该药物</strong><p>已查询 DrugShop 的 RxNorm、ChEMBL、PubChem、FDA 与 ClinicalTrials.gov 数据链路。</p></div></section>`;
     }
 
     const ids = result.identifiers || {};
@@ -637,7 +642,8 @@
       identifier("CID", ids.pubchemCid, result.sources?.pubchem)
     ].filter(Boolean).join("");
 
-    const summary = `<div class="drug-summary"><div class="drug-name-row"><div><h3>${esc(result.name || query)}</h3><div class="drug-query">查询词：${esc(query)}${result.cache?.hit ? " · 读取自本机 7 天缓存" : ""}</div></div><div class="id-row">${idRows}</div></div><div class="fact-grid">${fact("通用名", names.generic)}${fact("商品名", names.brands)}${fact("分子式", structure.formula)}${fact("分子量", structure.molecularWeight)}${fact("分子类型", result.format?.description)}${fact("最高开发阶段", phaseLabel(result.development?.maxPhase))}</div></div>`;
+    const ttlDays = Number(result.cache?.ttlDays) || 30;
+    const summary = `<div class="drug-summary"><div class="drug-name-row"><div><h3>${esc(result.name || query)}</h3><div class="drug-query">查询词：${esc(query)}${result.cache?.hit ? ` · 读取自本机 ${ttlDays} 天缓存` : ""}</div></div><div class="id-row">${idRows}</div></div><div class="fact-grid">${fact("通用名", names.generic)}${fact("商品名", names.brands)}${fact("分子式", structure.formula)}${fact("分子量", structure.molecularWeight)}${fact("分子类型", result.format?.description)}${fact("最高开发阶段", phaseLabel(result.development?.maxPhase))}</div></div>`;
 
     const identity = `<div class="subheading">通用名</div>${tags(names.generic)}<div class="subheading">商品名</div>${tags(names.brands)}<div class="subheading">别名 / 研发编号</div>${tags(names.aliases)}<div class="subheading">处方信息</div><p class="detail-text">剂型：${esc(valueOrDash(prescription.rxtermsDoseForm))}<br>给药途径：${esc(valueOrDash(prescription.route))}<br>规格：${esc(valueOrDash(prescription.strength))}</p>${structure.iupac ? `<div class="subheading">IUPAC</div><p class="detail-text">${esc(structure.iupac)}</p>` : ""}${structure.smiles ? `<div class="subheading">SMILES</div><p class="detail-text">${esc(structure.smiles)}</p>` : ""}`;
 
@@ -683,7 +689,7 @@
     const sourceRows = Object.entries(result.sources || {}).filter(([, url]) => url).map(([name, url]) => `<a href="#" data-external-url="${esc(url)}">${esc(name)} ↗</a>`).join("");
     const sources = sourceRows ? detailSection("原始数据源", Object.values(result.sources || {}).filter(Boolean).length, `<div class="source-links">${sourceRows}</div>`) : "";
 
-    return `<section class="result-block"><div class="result-block-heading"><div class="heading-title"><span class="heading-label">DRUG</span><h2>${esc(result.name || query)}</h2></div><span class="phase-chip">${esc(phaseLabel(result.development?.maxPhase))}</span>${cacheBadge(result)}</div>${summary}${detailSection("名称、结构与处方", null, identity)}${detailSection("靶点与作用机制", mechanisms.length, mechanismBody)}${detailSection("分类与适应症", indications.length, indicationBody)}${detailSection("FDA 批准记录", approvals.length, approvalBody)}${detailSection("临床试验", trials.length, trialBody)}${detailSection("药理活性", activities.length, activityBody)}${sources}${warningDetails(result.warnings)}</section>`;
+    return `<section class="result-block"><div class="result-block-heading"><div class="heading-title"><span class="heading-label">DRUG</span><h2>${esc(result.name || query)}</h2></div>${refreshButton(query)}<span class="phase-chip">${esc(phaseLabel(result.development?.maxPhase))}</span>${cacheBadge(result)}</div>${summary}${detailSection("名称、结构与处方", null, identity)}${detailSection("靶点与作用机制", mechanisms.length, mechanismBody)}${detailSection("分类与适应症", indications.length, indicationBody)}${detailSection("FDA 批准记录", approvals.length, approvalBody)}${detailSection("临床试验", trials.length, trialBody)}${detailSection("药理活性", activities.length, activityBody)}${sources}${warningDetails(result.warnings)}</section>`;
   }
 
   function renderResults({ word = undefined, drug = undefined, errors = {} }) {
@@ -695,7 +701,9 @@
     $("#results").scrollTop = 0;
   }
 
-  async function runManual(kind) {
+  async function runManual(kind, options = {}) {
+    const override = clean(options.queryOverride);
+    if (override) $("#query-input").value = override;
     const query = clean($("#query-input").value);
     if (!query) {
       setRequestStatus("请先输入查询内容", "error");
@@ -704,7 +712,7 @@
     }
     const requestId = ++state.requestId;
     state.activeSelectionRequestId = null;
-    addHistory(query, kind);
+    if (!options.skipHistory) addHistory(query, kind);
     closeHistory();
     setActiveMode(kind);
     setBusy(true);
@@ -712,12 +720,12 @@
     showLoading(kind, query);
     try {
       const result = kind === "drug"
-        ? await api.lookupDrug(query)
+        ? await api.lookupDrug(query, { forceRefresh: Boolean(options.forceRefresh) })
         : await api.lookupWord(query, { ...currentLanguagePair(), requestId });
       if (requestId !== state.requestId) return;
       renderResults(kind === "drug" ? { drug: result } : { word: result });
       setRequestStatus(kind === "drug"
-        ? (result.cache?.hit ? "药物结果来自 7 天缓存" : result.success ? "药物数据已返回并缓存" : "未找到该药物，结果已缓存")
+        ? (result.cache?.hit ? `药物结果来自 ${Number(result.cache.ttlDays) || 30} 天缓存` : result.success ? "药物数据已返回并缓存" : "未找到该药物，结果已缓存")
         : (result.cache?.hit
           ? "查询结果已从缓存返回"
           : result.dictionaryResults?.length
@@ -986,6 +994,18 @@
         event.preventDefault();
         event.stopPropagation();
         void copyFromButton(copyControl);
+        return;
+      }
+      const refreshControl = event.target.closest("[data-refresh-drug]");
+      if (refreshControl) {
+        event.preventDefault();
+        event.stopPropagation();
+        refreshControl.disabled = true;
+        void runManual("drug", {
+          forceRefresh: true,
+          queryOverride: refreshControl.dataset.refreshDrug,
+          skipHistory: true
+        });
         return;
       }
       const audioButton = event.target.closest("[data-audio-url]");

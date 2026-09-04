@@ -43,6 +43,36 @@ development also needs the MSVC C++ linker (link.exe) and WebView2. The
 current machine has Rustup/Rust installed, but still needs Visual Studio Build
 Tools with the C++ workload before cargo check or tauri build can finish.
 
+## Build without Visual Studio Build Tools
+
+When `link.exe` is unavailable, the project also provides a no-admin GNU
+fallback. It uses the portable MinGW-w64 directory at
+`%USERPROFILE%\.w64devkit` by default, or the directory specified by
+`MEDICT_MINGW_ROOT`:
+
+```powershell
+npm run build:gnu
+```
+
+This selects the `stable-x86_64-pc-windows-gnu` Rust toolchain, ensures the
+Windows selection helper exists, and produces an unpacked executable without
+creating an installer:
+
+```text
+src-tauri/target/x86_64-pc-windows-gnu/release/medict-tauri.exe
+```
+
+To create the Tauri bundle with the same GNU toolchain, run
+`npm run build:gnu:bundle`. The regular `npm run build` command remains the
+standard Tauri/MSVC build path.
+
+To force a rebuild of the selection helper, run
+`npm run build:gnu -- rebuild-helper`.
+
+If the current executable is still running and Windows locks the default
+output, set `MEDICT_CARGO_TARGET_DIR` to another directory under
+`src-tauri\target` before building.
+
 ## Migration boundary
 
 The copied renderer can now be developed without Electron imports. The Rust
@@ -62,7 +92,7 @@ Not yet ported:
 - DrugShop's ChEMBL, FDA and ClinicalTrials.gov enrichment pipeline;
 - Windows selection helper and automatic selection monitor;
 - global shortcuts and shortcut recording;
-- Electron-specific cache and partial-result streaming.
+- Electron-specific partial-result streaming.
 
 The remaining placeholder responses identify these boundaries instead of
 pretending that the Electron service implementations already run in Tauri.

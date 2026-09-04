@@ -12,7 +12,7 @@ contextBridge.exposeInMainWorld("medict", {
   saveSettings: value => ipcRenderer.invoke("settings:save", value),
   saveLanguagePair: value => ipcRenderer.invoke("settings:set-language-pair", value),
   lookupWord: (query, options) => ipcRenderer.invoke("lookup:word", query, options),
-  lookupDrug: query => ipcRenderer.invoke("lookup:drug", query),
+  lookupDrug: (query, options) => ipcRenderer.invoke("lookup:drug", query, options || {}),
   lookupSelection: query => ipcRenderer.invoke("lookup:selection", query),
   getSelectionStatus: () => ipcRenderer.invoke("selection:status"),
   suspendShortcuts: () => ipcRenderer.invoke("shortcuts:suspend"),

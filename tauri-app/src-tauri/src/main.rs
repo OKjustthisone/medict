@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::{
+    collections::HashSet,
     fs,
     io::{BufRead, BufReader},
     path::PathBuf,
@@ -10,11 +11,12 @@ use std::{
         Arc, Mutex,
     },
     thread::JoinHandle,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use medict_core::{drug_lookup, word_lookup};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{
     menu::{Menu, MenuItem},
@@ -28,6 +30,7 @@ use std::os::windows::process::CommandExt;
 struct AppState {
     settings: Mutex<Value>,
     settings_path: PathBuf,
+    drug_cache: Mutex<DrugCacheStore>,
     window_lifecycle: Mutex<()>,
     keep_alive_after_window_destroy: AtomicBool,
     selection_process: Mutex<Option<Child>>,
@@ -38,6 +41,198 @@ struct AppState {
 struct HotkeyRuntime {
     stop: Arc<std::sync::atomic::AtomicBool>,
     thread: JoinHandle<()>,
+}
+
+const DRUG_CACHE_TTL_MS: u64 = 30 * 24 * 60 * 60 * 1000;
+const DRUG_CACHE_TTL_DAYS: u64 = 30;
+const DRUG_CACHE_VERSION: u32 = 1;
+const DRUG_CACHE_MAX_ENTRIES: usize = 200;
+
+#[derive(Clone, Deserialize, Serialize)]
+struct DrugCacheEntry {
+    cache_key: String,
+    query: String,
+    cached_at: u64,
+    expires_at: u64,
+    aliases: Vec<String>,
+    result: Value,
+}
+
+#[derive(Deserialize, Serialize)]
+struct DrugCacheFile {
+    version: u32,
+    entries: Vec<DrugCacheEntry>,
+}
+
+struct DrugCacheStore {
+    path: PathBuf,
+    entries: Vec<DrugCacheEntry>,
+}
+
+impl DrugCacheStore {
+    fn load(path: PathBuf) -> Self {
+        let entries = fs::read_to_string(&path)
+            .ok()
+            .and_then(|contents| serde_json::from_str::<DrugCacheFile>(&contents).ok())
+            .filter(|file| file.version == DRUG_CACHE_VERSION)
+            .map(|file| file.entries)
+            .unwrap_or_default();
+        let mut store = Self { path, entries };
+        let changed = store.prune(now_millis());
+        if changed {
+            if let Err(error) = store.persist() {
+                eprintln!("Medict drug cache could not be migrated: {error}");
+            }
+        }
+        store
+    }
+
+    fn get(&mut self, query: &str) -> (Option<DrugCacheEntry>, bool) {
+        let changed = self.prune(now_millis());
+        let key = normalize_drug_cache_key(query);
+        let entry = self
+            .entries
+            .iter()
+            .find(|entry| entry.cache_key == key || entry.aliases.iter().any(|alias| alias == &key))
+            .cloned();
+        (entry, changed)
+    }
+
+    fn set(&mut self, query: &str, result: &Value) -> Result<DrugCacheEntry, String> {
+        let cached_at = now_millis();
+        let cache_key = drug_cache_key(query, result);
+        let aliases = drug_cache_aliases(query, result);
+        let entry = DrugCacheEntry {
+            cache_key,
+            query: query.trim().to_string(),
+            cached_at,
+            expires_at: cached_at.saturating_add(DRUG_CACHE_TTL_MS),
+            aliases,
+            result: result.clone(),
+        };
+        let incoming_aliases: HashSet<&String> = entry.aliases.iter().collect();
+        self.entries.retain(|existing| {
+            existing.cache_key != entry.cache_key
+                && !existing
+                    .aliases
+                    .iter()
+                    .any(|alias| incoming_aliases.contains(alias))
+        });
+        self.entries.push(entry.clone());
+        self.prune(cached_at);
+        self.persist()?;
+        Ok(entry)
+    }
+
+    fn prune(&mut self, now: u64) -> bool {
+        let before = self.entries.len();
+        self.entries.retain(|entry| {
+            !entry.cache_key.is_empty() && !entry.result.is_null() && entry.expires_at > now
+        });
+        self.entries
+            .sort_by_key(|entry| std::cmp::Reverse(entry.cached_at));
+        self.entries.truncate(DRUG_CACHE_MAX_ENTRIES);
+        before != self.entries.len()
+    }
+
+    fn stats(&self) -> Value {
+        json!({
+            "count": self.entries.len(),
+            "ttlMs": DRUG_CACHE_TTL_MS,
+            "ttlDays": DRUG_CACHE_TTL_DAYS
+        })
+    }
+
+    fn persist(&self) -> Result<(), String> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        let file = DrugCacheFile {
+            version: DRUG_CACHE_VERSION,
+            entries: self.entries.clone(),
+        };
+        let contents = serde_json::to_string_pretty(&file).map_err(|error| error.to_string())?;
+        fs::write(&self.path, contents).map_err(|error| error.to_string())
+    }
+}
+
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn normalize_drug_cache_key(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+fn add_drug_cache_alias(aliases: &mut Vec<String>, value: &str) {
+    let key = normalize_drug_cache_key(value);
+    if !key.is_empty() && !aliases.iter().any(|alias| alias == &key) {
+        aliases.push(key);
+    }
+}
+
+fn add_drug_cache_value(aliases: &mut Vec<String>, value: Option<&Value>) {
+    match value {
+        Some(Value::Array(values)) => values.iter().for_each(|item| {
+            if let Some(value) = item.as_str() {
+                add_drug_cache_alias(aliases, value);
+            }
+        }),
+        Some(Value::String(value)) => add_drug_cache_alias(aliases, value),
+        _ => {}
+    }
+}
+
+fn drug_cache_aliases(query: &str, result: &Value) -> Vec<String> {
+    let mut aliases = Vec::new();
+    add_drug_cache_alias(&mut aliases, query);
+    add_drug_cache_value(&mut aliases, result.get("query"));
+    add_drug_cache_value(&mut aliases, result.get("name"));
+    if let Some(names) = result.get("names") {
+        for field in ["preferred", "generic", "brands", "aliases"] {
+            add_drug_cache_value(&mut aliases, names.get(field));
+        }
+    }
+    aliases
+}
+
+fn drug_cache_key(query: &str, result: &Value) -> String {
+    let preferred = result
+        .get("names")
+        .and_then(|names| names.get("preferred"))
+        .and_then(Value::as_str)
+        .or_else(|| result.get("name").and_then(Value::as_str))
+        .unwrap_or(query);
+    let key = normalize_drug_cache_key(preferred);
+    if key.is_empty() {
+        normalize_drug_cache_key(query)
+    } else {
+        key
+    }
+}
+
+fn with_drug_cache(mut result: Value, query: &str, hit: bool, entry: Option<&DrugCacheEntry>) -> Value {
+    if let Some(object) = result.as_object_mut() {
+        object.insert("query".to_string(), json!(query.trim()));
+        let now = now_millis();
+        object.insert(
+            "cache".to_string(),
+            json!({
+                "hit": hit,
+                "cachedAt": entry.map(|value| value.cached_at).unwrap_or(now),
+                "expiresAt": entry.map(|value| value.expires_at).unwrap_or_else(|| now.saturating_add(DRUG_CACHE_TTL_MS)),
+                "ttlDays": DRUG_CACHE_TTL_DAYS
+            }),
+        );
+    }
+    result
 }
 
 fn default_settings() -> Value {
@@ -745,8 +940,49 @@ async fn lookup_selection(state: State<'_, AppState>, query: String) -> Result<V
 }
 
 #[tauri::command]
-async fn lookup_drug(query: String) -> Result<Value, String> {
-    drug_lookup::lookup_drug(&query).await
+async fn lookup_drug(
+    state: State<'_, AppState>,
+    query: String,
+    options: Value,
+) -> Result<Value, String> {
+    let force_refresh = options
+        .get("forceRefresh")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if !force_refresh {
+        let cached = {
+            let mut cache = state
+                .drug_cache
+                .lock()
+                .map_err(|_| "药物缓存状态锁定失败".to_string())?;
+            let (entry, changed) = cache.get(&query);
+            if changed {
+                if let Err(error) = cache.persist() {
+                    eprintln!("Medict drug cache could not be pruned: {error}");
+                }
+            }
+            entry
+        };
+        if let Some(entry) = cached {
+            return Ok(with_drug_cache(entry.result.clone(), &query, true, Some(&entry)));
+        }
+    }
+
+    let result = drug_lookup::lookup_drug(&query).await?;
+    let saved = {
+        let mut cache = state
+            .drug_cache
+            .lock()
+            .map_err(|_| "药物缓存状态锁定失败".to_string())?;
+        match cache.set(&query, &result) {
+            Ok(entry) => Some(entry),
+            Err(error) => {
+                eprintln!("Medict drug cache could not be updated: {error}");
+                None
+            }
+        }
+    };
+    Ok(with_drug_cache(result, &query, false, saved.as_ref()))
 }
 
 #[tauri::command]
@@ -805,8 +1041,12 @@ fn shortcuts_resume(app: AppHandle) -> bool {
 }
 
 #[tauri::command]
-fn drug_cache_stats() -> Value {
-    json!({ "count": 0, "ttlMs": 604800000, "migration": true })
+fn drug_cache_stats(state: State<'_, AppState>) -> Value {
+    state
+        .drug_cache
+        .lock()
+        .map(|cache| cache.stats())
+        .unwrap_or_else(|_| json!({ "count": 0, "ttlMs": DRUG_CACHE_TTL_MS, "ttlDays": DRUG_CACHE_TTL_DAYS }))
 }
 
 #[tauri::command]
@@ -940,6 +1180,11 @@ fn main() {
         .setup(|app| {
             setup_tray(app)?;
             let path = settings_path(app.handle())?;
+            let drug_cache_path = path
+                .parent()
+                .map(|directory| directory.join("drug-cache.json"))
+                .ok_or_else(|| "无法定位药物缓存目录".to_string())?;
+            let drug_cache = DrugCacheStore::load(drug_cache_path);
             let settings = load_settings(&path);
             if settings
                 .get("behavior")
@@ -954,6 +1199,7 @@ fn main() {
             app.manage(AppState {
                 settings: Mutex::new(settings),
                 settings_path: path,
+                drug_cache: Mutex::new(drug_cache),
                 window_lifecycle: Mutex::new(()),
                 keep_alive_after_window_destroy: AtomicBool::new(false),
                 selection_process: Mutex::new(None),

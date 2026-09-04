@@ -10,7 +10,9 @@
     "tauri": "tauri",
     "pretauri": "npm run build:selection-helper",
     "dev": "tauri dev",
-    "build": "tauri build"
+    "build": "tauri build",
+    "build:gnu": "call build-gnu.cmd",
+    "build:gnu:bundle": "call build-gnu.cmd bundle"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0"

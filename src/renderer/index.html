@@ -41,43 +41,42 @@
       <button id="clear-button" class="clear-button" type="button" title="清空" aria-label="清空输入">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l1 2h4v2h-1l-1 13H6L5 7H4V5h4l1-2Zm-1.9 4 .8 11h8.2l.8-11H7.1ZM9 9h2v7H9V9Zm4 0h2v7h-2V9Z"/></svg>
       </button>
+      <section class="language-row" aria-label="查询语言方向">
+        <label class="language-select-wrap">
+          <span class="sr-only">源语言</span>
+          <select id="source-language" aria-label="源语言">
+            <option value="auto">自动识别</option>
+            <option value="zh-CN">简体中文</option>
+            <option value="en">English</option>
+            <option value="ja">日本語</option>
+            <option value="ko">한국어</option>
+            <option value="fr">Français</option>
+            <option value="de">Deutsch</option>
+            <option value="es">Español</option>
+            <option value="ru">Русский</option>
+          </select>
+        </label>
+        <button id="swap-languages-button" class="swap-languages-button" type="button" title="互换语言" aria-label="互换源语言和目标语言">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7-3 3 3 3v-2h11V9H7V7Zm10 4v2H6v2h11v2l3-3-3-3Z"/></svg>
+        </button>
+        <label class="language-select-wrap">
+          <span class="sr-only">目标语言</span>
+          <select id="target-language" aria-label="目标语言">
+            <option value="zh-CN">简体中文</option>
+            <option value="en">English</option>
+            <option value="ja">日本語</option>
+            <option value="ko">한국어</option>
+            <option value="fr">Français</option>
+            <option value="de">Deutsch</option>
+            <option value="es">Español</option>
+            <option value="ru">Русский</option>
+          </select>
+        </label>
+      </section>
       <div id="history-popover" class="history-popover" hidden>
         <div class="history-heading"><strong>最近查询</strong><span>最多 10 条</span></div>
         <div id="history-list" class="history-list"></div>
       </div>
-    </section>
-
-    <section class="language-row" aria-label="查询语言方向">
-      <label class="language-select-wrap">
-        <span class="sr-only">源语言</span>
-        <select id="source-language" aria-label="源语言">
-          <option value="auto">自动识别</option>
-          <option value="zh-CN">简体中文</option>
-          <option value="en">English</option>
-          <option value="ja">日本語</option>
-          <option value="ko">한국어</option>
-          <option value="fr">Français</option>
-          <option value="de">Deutsch</option>
-          <option value="es">Español</option>
-          <option value="ru">Русский</option>
-        </select>
-      </label>
-      <button id="swap-languages-button" class="swap-languages-button" type="button" title="互换语言" aria-label="互换源语言和目标语言">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7-3 3 3 3v-2h11V9H7V7Zm10 4v2H6v2h11v2l3-3-3-3Z"/></svg>
-      </button>
-      <label class="language-select-wrap">
-        <span class="sr-only">目标语言</span>
-        <select id="target-language" aria-label="目标语言">
-          <option value="zh-CN">简体中文</option>
-          <option value="en">English</option>
-          <option value="ja">日本語</option>
-          <option value="ko">한국어</option>
-          <option value="fr">Français</option>
-          <option value="de">Deutsch</option>
-          <option value="es">Español</option>
-          <option value="ru">Русский</option>
-        </select>
-      </label>
     </section>
 
     <section class="action-row" aria-label="查询操作">
@@ -231,7 +230,7 @@
               <option value="145">特大</option>
             </select>
           </label>
-          <p class="subtle-note">药物查询结果会自动保存在本机 7 天，相同查询优先读取缓存。</p>
+          <p class="subtle-note">药物查询结果会自动保存在本机 30 天，相同查询优先读取缓存；点击结果右上角的刷新按钮可跳过缓存。</p>
         </section>
 
         <section class="settings-section compact-settings">

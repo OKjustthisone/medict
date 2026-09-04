@@ -32,7 +32,7 @@
     saveSettings: value => call("settings_save", { value }),
     saveLanguagePair: value => call("settings_set_language_pair", { value }),
     lookupWord: (query, options) => call("lookup_word", { query, options: options || {} }),
-    lookupDrug: query => call("lookup_drug", { query }),
+    lookupDrug: (query, options) => call("lookup_drug", { query, options: options || {} }),
     lookupSelection: query => call("lookup_selection", { query }),
     getSelectionStatus: () => call("selection_status"),
     suspendShortcuts: () => call("shortcuts_suspend"),

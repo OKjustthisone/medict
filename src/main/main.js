@@ -12,7 +12,7 @@ const {
   shell,
   Tray
 } = require("electron");
-const { DrugCache } = require("./drug-cache");
+const { DrugCache, THIRTY_DAYS_MS } = require("./drug-cache");
 const { registerShortcutConfiguration, validateShortcutConfiguration } = require("./shortcut-manager");
 const { captureSelectionOnce, SelectionMonitor } = require("./selection-monitor");
 const { searchDrug } = require("./services/drugshop");
@@ -259,21 +259,24 @@ async function runWordLookup(query, requestOptions = {}, onPartial = null) {
   return writeWordLookupCache(cacheKey, result);
 }
 
-async function runDrugLookup(query) {
+async function runDrugLookup(query, options = {}) {
   let cached = null;
-  try {
-    cached = await drugCache?.get(query);
-  } catch (error) {
-    console.warn("Medict drug cache could not be read:", error.message);
+  if (!options.forceRefresh) {
+    try {
+      cached = await drugCache?.get(query);
+    } catch (error) {
+      console.warn("Medict drug cache could not be read:", error.message);
+    }
   }
   if (cached) {
     return {
       ...cached.result,
+      query: String(query || "").trim(),
       cache: {
         hit: true,
         cachedAt: cached.cachedAt,
         expiresAt: cached.expiresAt,
-        ttlDays: 7
+        ttlDays: Math.round((drugCache?.ttlMs || THIRTY_DAYS_MS) / (24 * 60 * 60 * 1000))
       }
     };
   }
@@ -286,8 +289,8 @@ async function runDrugLookup(query) {
       cache: {
         hit: false,
         cachedAt: saved?.cachedAt || Date.now(),
-        expiresAt: saved?.expiresAt || Date.now() + (7 * 24 * 60 * 60 * 1000),
-        ttlDays: 7
+        expiresAt: saved?.expiresAt || Date.now() + THIRTY_DAYS_MS,
+        ttlDays: Math.round((drugCache?.ttlMs || THIRTY_DAYS_MS) / (24 * 60 * 60 * 1000))
       }
     };
   } catch (error) {
@@ -444,7 +447,7 @@ function registerIpc() {
       result: partial
     });
   }));
-  ipcMain.handle("lookup:drug", (_, query) => runDrugLookup(query));
+  ipcMain.handle("lookup:drug", (_, query, options = {}) => runDrugLookup(query, options));
   ipcMain.handle("lookup:selection", (_, query) => runSelectionLookup(query));
   ipcMain.handle("selection:status", () => selectionStatus);
   ipcMain.handle("shortcuts:suspend", () => {
@@ -459,7 +462,7 @@ function registerIpc() {
     syncSelectionMonitor();
     return result;
   });
-  ipcMain.handle("drug-cache:stats", () => drugCache?.stats() || { count: 0, ttlMs: 7 * 24 * 60 * 60 * 1000 });
+  ipcMain.handle("drug-cache:stats", () => drugCache?.stats() || { count: 0, ttlMs: THIRTY_DAYS_MS, ttlDays: 30 });
   ipcMain.handle("clipboard:write-text", (_, value) => {
     const text = String(value || "").slice(0, 250000);
     if (!text.trim()) throw new Error("没有可复制的内容");
@@ -497,7 +500,7 @@ function registerIpc() {
 function createWindow() {
   const settings = settingsStore.get();
   mainWindow = new BrowserWindow({
-    width: 420,
+    width: 360,
     height: 610,
     minWidth: 360,
     minHeight: 300,
