@@ -316,7 +316,8 @@
   }
 
   function loadingBlock(label, query) {
-    return `<section class="result-block"><div class="result-block-heading"><div class="heading-title"><span class="heading-label">${esc(label)}</span><h2>${esc(query)}</h2></div><span class="source-badge">查询中</span></div><div class="loading-state"><div class="loading-line short"></div><div class="loading-line"></div><div class="loading-line medium"></div></div></section>`;
+    const title = label === "DRUG" && query ? `<h2>${esc(query)}</h2>` : "";
+    return `<section class="result-block"><div class="result-block-heading"><div class="heading-title"><span class="heading-label">${esc(label)}</span>${title}</div><span class="source-badge">查询中</span></div><div class="loading-state"><div class="loading-line short"></div><div class="loading-line"></div><div class="loading-line medium"></div></div></section>`;
   }
 
   function showLoading(mode, query) {
@@ -548,11 +549,12 @@
   function renderWord(result, error = "") {
     const query = result?.query || clean($("#query-input").value);
     if (error) {
-      return `<section class="result-block"><div class="result-block-heading"><div class="heading-title"><span class="heading-label">WORD</span><h2>${esc(query || "查词")}</h2></div></div><div class="notice error"><strong>查词失败</strong>${esc(error)}</div></section>`;
+      return `<section class="result-block"><div class="result-block-heading"><div class="heading-title"><span class="heading-label">WORD</span></div></div><div class="notice error"><strong>查词失败</strong>${esc(error)}</div></section>`;
     }
     if (!result) return loadingBlock("WORD", query);
 
-    const heading = `<div class="result-block-heading"><div class="heading-title"><span class="heading-label">WORD</span><h2>${esc(query)}</h2></div><span class="source-badge">${esc(sourceBadge(result))}</span></div>`;
+    const label = result.dictionaryResults?.length ? "WORD" : "TRANSLATE";
+    const heading = `<div class="result-block-heading"><div class="heading-title"><span class="heading-label">${label}</span></div><span class="source-badge">${esc(sourceBadge(result))}</span></div>`;
     let content = "";
     if (result.dictionaryResults?.length) {
       content = result.displayResults?.length ? renderOrderedResults(result.displayResults) : `${result.dictionaryResults.map(renderDictionaryEntry).join("")}${renderCloudReference(result.cloudResults, true)}`;
